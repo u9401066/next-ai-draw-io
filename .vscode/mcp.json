@@ -1,0 +1,8 @@
+{
+  "servers": {
+    "drawio": {
+      "command": "uv",
+      "args": ["--directory", "${workspaceFolder}/mcp-server", "run", "drawio-mcp-server"]
+    }
+  }
+}
