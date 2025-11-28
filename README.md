@@ -168,12 +168,40 @@ npm run dev
 
 | Tool | Description |
 |------|-------------|
-| `create_diagram` | Create a new diagram from description |
+| `create_diagram` | Create a new diagram from description or custom XML |
 | `edit_diagram` | Edit an existing diagram |
 | `read_diagram` | Read and describe diagram contents |
 | `list_templates` | List available diagram templates |
 | `create_from_template` | Create diagram from template |
 | `export_diagram` | Export diagram to SVG/PNG/PDF |
+| `get_web_status` | Check Draw.io web editor status |
+| `start_drawio_web` | Start the Draw.io web editor |
+| `list_tabs` | List all open diagram tabs |
+| `switch_tab` | Switch to a specific tab |
+| `close_tab` | Close a diagram tab |
+
+### Agent-Generated XML Support
+
+The `create_diagram` tool now supports **direct XML input** from AI agents. This allows agents like GitHub Copilot to generate complex Draw.io diagrams by:
+
+1. Understanding the diagram request
+2. Generating Draw.io XML format
+3. Sending XML to browser via MCP tool
+
+Example usage with XML parameter:
+```
+create_diagram(
+  description="A horse drawing",
+  xml="<root><mxCell id='0'/>...</root>",
+  tab_name="My Diagram"
+)
+```
+
+The tool description includes complete XML format documentation with:
+- Shape styles (rectangle, ellipse, rhombus, etc.)
+- Color options (blue, green, yellow, orange, purple, red)
+- Layout guidelines (x: 0-800, y: 0-600)
+- Edge/arrow configurations
 
 ### Architecture
 
@@ -230,6 +258,8 @@ public/               # Static assets including example images
 -   [x] Improve the smoothness of shape streaming updates.
 -   [x] Add multiple AI provider support (OpenAI, Anthropic, Google, Azure, Ollama)
 -   [x] Add GitHub Copilot MCP integration for VS Code control
+-   [x] Support agent-generated XML in MCP tools (2024-11-28)
+-   [x] Fix MCP server blocking issue during Web service startup (2024-11-28)
 -   [ ] Solve the bug that generation will fail for session that longer than 60s.
 
 ## License
