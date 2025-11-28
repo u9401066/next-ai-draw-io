@@ -4,9 +4,10 @@
 
 import re
 import xml.etree.ElementTree as ET
-from typing import Optional
+from typing import Optional, Tuple
 import base64
 import zlib
+from datetime import datetime
 
 
 class DiagramGenerator:
@@ -20,11 +21,17 @@ class DiagramGenerator:
         self.id_counter += 1
         return str(self.id_counter)
     
+    def _reset_id_counter(self):
+        """重置 ID 計數器"""
+        self.id_counter = 2
+    
     def create_diagram(self, description: str, diagram_type: str) -> str:
         """
         根據描述創建圖表 XML
-        這裡提供基本的 XML 結構，實際使用時會由 LLM 生成更複雜的內容
+        返回完整的 mxGraphModel 內容（可直接用於瀏覽器顯示）
         """
+        self._reset_id_counter()
+        
         # 基本的 Draw.io XML 結構
         elements = []
         
@@ -41,7 +48,27 @@ class DiagramGenerator:
         else:
             elements = self._create_custom_elements(description)
         
-        return self._build_root_xml(elements)
+        root_xml = self._build_root_xml(elements)
+        
+        # 返回完整的 mxfile 格式（用於瀏覽器顯示）
+        return self._wrap_for_browser(root_xml)
+    
+    def _wrap_for_browser(self, root_xml: str) -> str:
+        """
+        包裝成瀏覽器可直接載入的完整 mxfile 格式
+        react-drawio 的 load() 方法需要完整的 mxfile XML
+        """
+        return f'''<mxfile host="drawio-mcp" modified="{self._get_timestamp()}" agent="Draw.io MCP Server" version="24.0.0" type="device">
+  <diagram id="diagram-1" name="Page-1">
+    <mxGraphModel dx="1200" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      {root_xml}
+    </mxGraphModel>
+  </diagram>
+</mxfile>'''
+    
+    def _get_timestamp(self) -> str:
+        """獲取當前時間戳"""
+        return datetime.now().isoformat()
     
     def _build_root_xml(self, elements: list) -> str:
         """構建 root XML"""
@@ -204,11 +231,6 @@ class DiagramGenerator:
     </mxGraphModel>
   </diagram>
 </mxfile>'''
-    
-    def _get_timestamp(self) -> str:
-        """獲取當前時間戳"""
-        from datetime import datetime
-        return datetime.now().isoformat()
     
     def edit_diagram(self, current_xml: str, changes: str) -> str:
         """
