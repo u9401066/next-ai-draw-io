@@ -198,6 +198,28 @@ class WebClient:
                 return {"error": f"HTTP {response.status_code}"}
         except Exception as e:
             return {"error": str(e)}
+    
+    async def get_diagram_content(self, tab_id: Optional[str] = None) -> dict:
+        """
+        取得圖表內容
+        
+        Args:
+            tab_id: 分頁 ID，不指定則取得當前活躍分頁
+            
+        Returns:
+            包含 xml, tabId, tabName 的 dict
+        """
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                url = f"{config.api_mcp_url}?action=get"
+                if tab_id:
+                    url += f"&tabId={tab_id}"
+                response = await client.get(url)
+                if response.status_code == 200:
+                    return response.json()
+                return {"error": f"HTTP {response.status_code}"}
+        except Exception as e:
+            return {"error": str(e)}
 
 
 # 全局客戶端實例
