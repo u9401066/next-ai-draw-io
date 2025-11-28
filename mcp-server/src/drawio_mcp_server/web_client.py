@@ -1,13 +1,20 @@
 """
 Web 客戶端 - 管理與 Next.js 前端的通信
+
+修正：
+- 增加 is_port_in_use() 來檢查 port 是否被佔用
+- is_running() 增加重試機制和更長的 timeout
+- start_web_server() 先檢查 port，如果已被佔用則嘗試直接連接
 """
 
 import sys
 import time
+import socket
 import atexit
 import subprocess
 import webbrowser
 from typing import Optional, Any
+from urllib.parse import urlparse
 import httpx
 
 from .config import config, get_web_dir, get_npm_path
@@ -21,31 +28,81 @@ class WebClient:
         # 註冊退出時停止 Web 服務
         atexit.register(self.stop_web_server)
     
-    def is_running(self) -> bool:
-        """檢查 Web 服務是否正在運行"""
-        try:
-            response = httpx.get(
-                f"{config.api_mcp_url}?action=poll", 
-                timeout=2
-            )
-            return response.status_code == 200
-        except Exception:
-            return False
+    def _get_port(self) -> int:
+        """從 config URL 提取 port"""
+        parsed = urlparse(config.nextjs_url)
+        return parsed.port or 80
+    
+    def is_port_in_use(self) -> bool:
+        """檢查 port 是否已被佔用（不管是誰佔用）"""
+        port = self._get_port()
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            return s.connect_ex(('localhost', port)) == 0
+    
+    def is_running(self, retries: int = 2) -> bool:
+        """
+        檢查 Web 服務是否正在運行並可用
+        
+        Args:
+            retries: 重試次數
+        """
+        for attempt in range(retries):
+            try:
+                response = httpx.get(
+                    f"{config.api_mcp_url}?action=poll", 
+                    timeout=5.0  # 增加 timeout
+                )
+                if response.status_code == 200:
+                    return True
+            except Exception as e:
+                if attempt < retries - 1:
+                    time.sleep(0.5)  # 短暫等待後重試
+                continue
+        return False
     
     def start_web_server(self) -> bool:
         """
         啟動 Next.js Web 服務
         
-        Returns:
-            bool: 是否成功啟動
-        """
-        if not config.auto_start_web:
-            return False
+        智能處理：
+        1. 如果服務已在運行 → 直接返回成功
+        2. 如果 port 被佔用但 API 不可用 → 可能是另一個應用，報錯
+        3. 如果 port 空閒 → 啟動新服務
         
-        # 檢查是否已經在運行
+        Returns:
+            bool: 是否成功啟動或已經可用
+        """
+        # 先檢查服務是否已經可用
         if self.is_running():
             print(f"✅ Draw.io Web 已在運行: {config.nextjs_url}", file=sys.stderr)
             return True
+        
+        # 檢查 port 是否被佔用
+        if self.is_port_in_use():
+            # Port 被佔用但 API 不回應，可能是：
+            # 1. Next.js 正在啟動中 - 等一下再試
+            # 2. 另一個應用佔用了 port
+            print(f"⚠️ Port {self._get_port()} 已被佔用，等待服務就緒...", file=sys.stderr)
+            
+            # 等待最多 10 秒看服務是否會就緒
+            for i in range(10):
+                time.sleep(1)
+                if self.is_running():
+                    print(f"✅ Draw.io Web 已就緒: {config.nextjs_url}", file=sys.stderr)
+                    return True
+                if i % 3 == 2:
+                    print(f"   等待中... ({i+1}s)", file=sys.stderr)
+            
+            # 還是不行，報告錯誤但建議用戶檢查
+            print(f"⚠️ Port {self._get_port()} 被佔用但服務不可用", file=sys.stderr)
+            print(f"   可能是另一個應用佔用了此 port", file=sys.stderr)
+            print(f"   請執行: lsof -i :{self._get_port()} 來檢查", file=sys.stderr)
+            return False
+        
+        # Port 空閒，啟動新服務
+        if not config.auto_start_web:
+            print(f"ℹ️ 自動啟動已停用，請手動執行 npm run dev", file=sys.stderr)
+            return False
         
         web_dir = get_web_dir()
         
@@ -73,8 +130,9 @@ class WebClient:
                 start_new_session=True
             )
             
-            # 等待啟動
-            for i in range(config.web_startup_timeout):
+            # 等待啟動（使用較短的等待時間因為我們已經確認 port 是空的）
+            startup_timeout = min(config.web_startup_timeout, 20)  # 最多 20 秒
+            for i in range(startup_timeout):
                 if self.is_running():
                     print(f"✅ Draw.io Web 已啟動: {config.nextjs_url}", file=sys.stderr)
                     self._open_browser()
@@ -83,12 +141,14 @@ class WebClient:
                 if i % 5 == 4:
                     print(f"   等待啟動中... ({i+1}s)", file=sys.stderr)
             
-            # 超時
+            # 超時 - 檢查進程狀態
             if self._web_process.poll() is not None:
                 _, stderr = self._web_process.communicate()
-                print(f"⚠️ Next.js 啟動失敗: {stderr.decode()[:200]}", file=sys.stderr)
+                error_msg = stderr.decode()[:300] if stderr else "Unknown error"
+                print(f"⚠️ Next.js 啟動失敗: {error_msg}", file=sys.stderr)
             else:
-                print("⚠️ Draw.io Web 啟動超時", file=sys.stderr)
+                print("⚠️ Draw.io Web 啟動超時，但進程仍在運行", file=sys.stderr)
+                print("   服務可能需要更多時間啟動，請稍後再試", file=sys.stderr)
             return False
             
         except Exception as e:

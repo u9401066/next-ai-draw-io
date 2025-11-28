@@ -37,10 +37,10 @@ def main():
     print(f"   NEXTJS_URL: {config.nextjs_url}", file=sys.stderr)
     print(f"   AUTO_START_WEB: {config.auto_start_web}", file=sys.stderr)
     
-    # 嘗試預先啟動 Web 服務
-    if config.auto_start_web:
-        result = web_client.start_web_server()
-        print(f"   Web 啟動結果: {'成功' if result else '失敗'}", file=sys.stderr)
+    # 不在啟動時預先啟動 Web 服務，避免阻塞 MCP initialize
+    # Web 服務會在第一次呼叫 create_diagram 或其他需要的工具時自動啟動
+    # 這樣可以避免 MCP initialize 超時問題
+    print(f"   Web 服務將在首次使用時自動啟動 (lazy start)", file=sys.stderr)
     
     mcp.run()
 
