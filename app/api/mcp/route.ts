@@ -7,6 +7,15 @@ interface TabState {
   xml: string;
 }
 
+// 用戶事件（從瀏覽器觸發的操作）
+interface UserEvent {
+  type: 'save' | 'autosave' | 'close' | 'change';
+  tabId: string;
+  tabName: string;
+  xml: string;
+  timestamp: number;
+}
+
 // 儲存所有分頁的圖表狀態（在生產環境中應該用 Redis 或其他持久化方案）
 let tabs: TabState[] = [];
 let activeTabId: string | null = null;
@@ -17,6 +26,9 @@ let pendingUpdates: {
   tabName?: string;
   action: 'display' | 'edit' | 'switch';
 }[] = [];
+
+// 用戶事件隊列（讓 Agent 可以查詢）
+let userEvents: UserEvent[] = [];
 
 function generateTabId(): string {
   return `tab-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -88,6 +100,29 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       tabs: tabs.map(t => ({ id: t.id, name: t.name, active: t.id === activeTabId })),
       activeTabId,
+    });
+  }
+
+  if (action === 'events') {
+    // 獲取用戶事件（讓 Agent 查詢用戶操作）
+    const since = parseInt(searchParams.get('since') || '0');
+    const events = userEvents.filter(e => e.timestamp > since);
+    
+    return NextResponse.json({
+      events,
+      count: events.length,
+      timestamp: Date.now(),
+    });
+  }
+
+  if (action === 'clear_events') {
+    // 清除已處理的事件
+    const before = parseInt(searchParams.get('before') || String(Date.now()));
+    userEvents = userEvents.filter(e => e.timestamp > before);
+    
+    return NextResponse.json({
+      success: true,
+      remaining: userEvents.length,
     });
   }
 
@@ -223,6 +258,44 @@ export async function POST(req: NextRequest) {
         }
       }
       return NextResponse.json({ success: true, message: 'Synced' });
+    }
+
+    if (action === 'user_save' || action === 'user_autosave') {
+      // 用戶在瀏覽器中觸發的存檔事件
+      const eventType = action === 'user_save' ? 'save' : 'autosave';
+      const targetTabId = tabId || activeTabId || 'unknown';
+      const targetTabName = tabName || tabs.find(t => t.id === targetTabId)?.name || 'Untitled';
+      
+      // 更新分頁內容
+      if (targetTabId && targetTabId !== 'unknown') {
+        const tab = tabs.find(t => t.id === targetTabId);
+        if (tab && xml) {
+          tab.xml = xml;
+        }
+      }
+      
+      // 記錄用戶事件
+      const event: UserEvent = {
+        type: eventType,
+        tabId: targetTabId,
+        tabName: targetTabName,
+        xml: xml || '',
+        timestamp: Date.now(),
+      };
+      userEvents.push(event);
+      
+      // 只保留最近 100 個事件
+      if (userEvents.length > 100) {
+        userEvents = userEvents.slice(-100);
+      }
+      
+      console.log(`[MCP] User ${eventType} event received for tab: ${targetTabName}`);
+      
+      return NextResponse.json({ 
+        success: true, 
+        message: `User ${eventType} event recorded`,
+        eventId: event.timestamp,
+      });
     }
 
     return NextResponse.json({ error: 'Unknown action' }, { status: 400 });

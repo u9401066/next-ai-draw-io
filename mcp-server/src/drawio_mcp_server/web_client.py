@@ -280,6 +280,46 @@ class WebClient:
                 return {"error": f"HTTP {response.status_code}"}
         except Exception as e:
             return {"error": str(e)}
+    
+    async def get_user_events(self, since: int = 0) -> dict:
+        """
+        查詢用戶操作事件
+        
+        Args:
+            since: 只返回此時間戳之後的事件（毫秒）
+            
+        Returns:
+            包含 events 列表的 dict
+        """
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                url = f"{config.api_mcp_url}?action=events&since={since}"
+                response = await client.get(url)
+                if response.status_code == 200:
+                    return response.json()
+                return {"error": f"HTTP {response.status_code}"}
+        except Exception as e:
+            return {"error": str(e)}
+    
+    async def clear_user_events(self, before: int) -> dict:
+        """
+        清除指定時間戳之前的事件
+        
+        Args:
+            before: 清除此時間戳之前的所有事件
+            
+        Returns:
+            操作結果
+        """
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                url = f"{config.api_mcp_url}?action=clear_events&before={before}"
+                response = await client.get(url)
+                if response.status_code == 200:
+                    return response.json()
+                return {"error": f"HTTP {response.status_code}"}
+        except Exception as e:
+            return {"error": str(e)}
 
 
 # 全局客戶端實例

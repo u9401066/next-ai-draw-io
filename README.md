@@ -171,6 +171,9 @@ npm run dev
 | `create_diagram` | Create a new diagram from description or custom XML |
 | `edit_diagram` | Edit an existing diagram |
 | `read_diagram` | Read and describe diagram contents |
+| `save_tab` | Save diagram to .drawio file (smart: asks user if path not specified) |
+| `get_diagram_content` | Get diagram XML content |
+| `get_user_events` | Query user operations in browser (pull model for privacy) |
 | `list_templates` | List available diagram templates |
 | `create_from_template` | Create diagram from template |
 | `export_diagram` | Export diagram to SVG/PNG/PDF |
@@ -179,6 +182,55 @@ npm run dev
 | `list_tabs` | List all open diagram tabs |
 | `switch_tab` | Switch to a specific tab |
 | `close_tab` | Close a diagram tab |
+
+### Smart Save Workflow
+
+When user says "save", the agent can:
+1. Call `save_tab()` without path → Tool returns prompt asking where to save
+2. Agent asks user or auto-detects (project diagram vs casual drawing)
+3. Call `save_tab(file_path="...")` with the determined path
+
+### MCP-to-MCP Collaboration
+
+For project-related diagrams, Draw.io MCP can collaborate with other MCPs:
+
+```
+┌─────────────────┐                      ┌─────────────────┐
+│   Agent         │                      │   Agent         │
+│   (Copilot)     │                      │   (Copilot)     │
+└────────┬────────┘                      └────────┬────────┘
+         │                                        │
+         │ 1. "Save to project"                   │
+         ▼                                        │
+┌─────────────────┐                               │
+│  MDPaper MCP    │ 2. Get project path           │
+│  (Research)     │────────────────────►          │
+└────────┬────────┘                               │
+         │ 3. Return: "./figures/study-flow.drawio"
+         ▼                                        │
+┌─────────────────┐                               │
+│  Draw.io MCP    │◄──────────────────────────────┘
+│  save_tab()     │ 4. save_tab(file_path="./figures/...")
+└─────────────────┘
+```
+
+**Example Flow:**
+1. User: "存檔到專案"
+2. Agent calls MDPaper MCP → gets project diagram path
+3. Agent calls Draw.io MCP → `save_tab(file_path=project_path)`
+4. Diagram saved to project directory
+
+### User Event Query (Pull Model)
+
+Draw.io MCP uses a **pull model** for user events to protect privacy:
+
+```
+Browser (User actions) → Event Queue (silent) → Agent queries when needed
+```
+
+- User operations are NOT automatically sent to AI
+- Agent calls `get_user_events()` only when user mentions their actions
+- Saves tokens and protects user privacy
 
 ### Agent-Generated XML Support
 
@@ -260,6 +312,10 @@ public/               # Static assets including example images
 -   [x] Add GitHub Copilot MCP integration for VS Code control
 -   [x] Support agent-generated XML in MCP tools (2024-11-28)
 -   [x] Fix MCP server blocking issue during Web service startup (2024-11-28)
+-   [x] Add smart save workflow with user path query (2024-11-28)
+-   [x] Add user event query system (pull model for privacy) (2024-11-28)
+-   [x] Browser save button triggers file download (2024-11-28)
+-   [ ] MCP-to-MCP collaboration for project diagram management
 -   [ ] Solve the bug that generation will fail for session that longer than 60s.
 
 ## License

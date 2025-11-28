@@ -3,6 +3,8 @@ Draw.io MCP Tools - 分頁管理工具
 """
 
 import base64
+import os
+from pathlib import Path
 from typing import Optional
 from pydantic import Field
 
@@ -74,6 +76,72 @@ async def get_diagram_content_impl(tab_id: Optional[str] = None) -> dict:
     
     result = await web_client.get_diagram_content(tab_id)
     return result
+
+
+async def save_tab_impl(
+    file_path: Optional[str] = None,
+    tab_id: Optional[str] = None
+) -> str:
+    """
+    將分頁內容存檔到 .drawio 檔案
+    
+    Args:
+        file_path: 要存檔的路徑（.drawio 或 .xml），不指定則回傳提示
+        tab_id: 分頁 ID，不指定則存當前活躍分頁
+        
+    Returns:
+        存檔結果訊息，或詢問用戶的提示
+    """
+    if not web_client.is_running():
+        return "⚠️ Draw.io Web 未運行"
+    
+    # 取得圖表內容
+    result = await web_client.get_diagram_content(tab_id)
+    
+    if "error" in result:
+        return f"❌ 取得圖表失敗: {result['error']}"
+    
+    xml = result.get("xml", "")
+    tab_name = result.get("tabName", "未命名")
+    
+    if not xml:
+        return "⚠️ 圖表內容為空，無法存檔"
+    
+    # 如果沒有指定路徑，回傳提示讓 Agent 詢問用戶
+    if not file_path:
+        return f"""🤔 需要確認存檔位置
+
+**目前圖表:** {tab_name}
+**內容大小:** {len(xml)} 字元
+
+請詢問用戶要存到哪裡，例如：
+1. **專案圖表**: 存到專案的 `diagrams/` 或 `figures/` 目錄
+2. **隨手畫圖**: 存到 `~/Documents/` 或下載目錄
+3. **指定路徑**: 用戶指定完整路徑
+
+💡 建議提問方式：
+「請問這個圖表要存到哪裡？
+- 如果是專案相關，可以存到專案目錄（例如 `./diagrams/研究路線圖.drawio`）
+- 如果是隨手畫的，可以存到文件目錄」"""
+    
+    # 確保副檔名正確
+    path = Path(file_path)
+    if path.suffix.lower() not in ['.drawio', '.xml']:
+        path = path.with_suffix('.drawio')
+    
+    # 建立目錄（如果不存在）
+    path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # 寫入檔案
+    try:
+        path.write_text(xml, encoding='utf-8')
+        return f"""✅ 圖表已存檔
+
+**分頁:** {tab_name}
+**檔案:** {path}
+**大小:** {len(xml)} 字元"""
+    except Exception as e:
+        return f"❌ 存檔失敗: {e}"
 
 
 def register_tab_tools(mcp):
@@ -162,4 +230,37 @@ def register_tab_tools(mcp):
 {xml[:2000]}{'...' if len(xml) > 2000 else ''}
 ```
 
-💡 使用 mdpaper MCP 的 `save_diagram` 存檔到專案"""
+💡 使用 `save_tab` 直接存檔，或 mdpaper MCP 的 `save_diagram` 存到專案"""
+
+    @mcp.tool()
+    async def save_tab(
+        file_path: Optional[str] = Field(
+            default=None,
+            description="存檔路徑，例如 '/path/to/diagram.drawio'。如果不指定，將回傳提示讓你詢問用戶要存到哪裡"
+        ),
+        tab_id: Optional[str] = Field(
+            default=None,
+            description="要存檔的分頁 ID。不指定則存當前活躍分頁"
+        )
+    ) -> str:
+        """
+        將圖表分頁存檔到 .drawio 檔案。
+        
+        這是最簡單的存檔方式，直接將瀏覽器中的圖表存到本地檔案。
+        
+        使用情境：
+        - 用戶說「存檔」或「save」→ 不指定 file_path，工具會提示你詢問用戶
+        - 用戶說「把這個圖表存到 xxx.drawio」→ 指定 file_path
+        - 在建立新圖表前先存檔舊的
+        
+        智能存檔流程：
+        1. 如果用戶沒說要存哪裡 → 呼叫 save_tab() 不帶 file_path
+        2. 工具回傳提示 → 你詢問用戶要存到哪裡
+        3. 用戶回答後 → 呼叫 save_tab(file_path="用戶指定的路徑")
+        
+        範例：
+        - save_tab()  # 詢問用戶要存哪裡
+        - save_tab(file_path="flowchart.drawio")
+        - save_tab(file_path="/home/user/diagrams/arch.drawio", tab_id="tab-1")
+        """
+        return await save_tab_impl(file_path, tab_id)
