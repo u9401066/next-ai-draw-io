@@ -2,6 +2,8 @@
 
 A next.js web application that integrates AI capabilities with draw.io diagrams. This app allows you to create, modify, and enhance diagrams through natural language commands and AI-assisted visualization.
 
+**🆕 Now with GitHub Copilot MCP Integration!** Control diagrams directly from VS Code using GitHub Copilot Agent.
+
 https://github.com/user-attachments/assets/b2eef5f3-b335-4e71-a755-dc2e80931979
 
 Demo site: [https://next-ai-draw-io.vercel.app](https://next-ai-draw-io.vercel.app)
@@ -9,6 +11,7 @@ Demo site: [https://next-ai-draw-io.vercel.app](https://next-ai-draw-io.vercel.a
 ## Features
 
 -   **LLM-Powered Diagram Creation**: Leverage Large Language Models to create and manipulate draw.io diagrams directly through natural language commands
+-   **🆕 GitHub Copilot MCP Integration**: Control diagrams directly from VS Code using GitHub Copilot Agent via Model Context Protocol (MCP)
 -   **Image-Based Diagram Replication**: Upload existing diagrams or images and have the AI replicate and enhance them automatically
 -   **Diagram History**: Comprehensive version control that tracks all changes, allowing you to view and restore previous versions of your diagrams before the AI editing.
 -   **Interactive Chat Interface**: Communicate with AI to refine your diagrams in real-time
@@ -119,6 +122,74 @@ npm run dev
 
 5. Open [http://localhost:3000](http://localhost:3000) in your browser to see the application.
 
+## GitHub Copilot MCP Integration
+
+This fork adds support for controlling diagrams directly from VS Code using GitHub Copilot Agent via Model Context Protocol (MCP).
+
+### Prerequisites
+
+- VS Code with GitHub Copilot extension
+- Python 3.10+ with `uv` package manager
+
+### Setup MCP Server
+
+1. Install `uv` if not already installed:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+2. The MCP server configuration is in `.vscode/mcp.json`. Update the `uv` path if needed:
+
+```json
+{
+  "servers": {
+    "drawio-mcp-server": {
+      "command": "/path/to/uv",
+      "args": ["--directory", "${workspaceFolder}/mcp-server", "run", "drawio-mcp-server"]
+    }
+  }
+}
+```
+
+3. Start the Next.js development server:
+
+```bash
+npm run dev
+```
+
+4. In VS Code, open GitHub Copilot Chat and use the MCP tools:
+
+```
+@workspace Use the drawio tools to create a flowchart showing user login process
+```
+
+### Available MCP Tools
+
+| Tool | Description |
+|------|-------------|
+| `create_diagram` | Create a new diagram from description |
+| `edit_diagram` | Edit an existing diagram |
+| `read_diagram` | Read and describe diagram contents |
+| `list_templates` | List available diagram templates |
+| `create_from_template` | Create diagram from template |
+| `export_diagram` | Export diagram to SVG/PNG/PDF |
+
+### Architecture
+
+```
+┌─────────────────┐     MCP Protocol     ┌─────────────────┐
+│  GitHub Copilot │◄───────────────────►│  MCP Server     │
+│  (VS Code)      │                      │  (Python/FastMCP)│
+└─────────────────┘                      └────────┬────────┘
+                                                  │ HTTP
+                                                  ▼
+┌─────────────────┐     Polling          ┌─────────────────┐
+│  Browser        │◄───────────────────►│  Next.js API    │
+│  (Draw.io)      │                      │  (/api/mcp)     │
+└─────────────────┘                      └─────────────────┘
+```
+
 ## Deployment
 
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new) from the creators of Next.js.
@@ -134,6 +205,7 @@ Be sure to **set the environment variables** in the Vercel dashboard as you did 
 
 ```
 app/                  # Next.js application routes and pages
+  api/mcp/            # MCP communication API endpoint
   extract_xml.ts      # Utilities for XML processing
 components/           # React components
   chat-input.tsx      # User input component for AI interaction
@@ -141,7 +213,15 @@ components/           # React components
   ui/                 # UI components (buttons, cards, etc.)
 lib/                  # Utility functions and helpers
   utils.ts            # General utilities including XML conversion
+  use-mcp-polling.ts  # React hook for MCP polling
+mcp-server/           # Python MCP Server for GitHub Copilot integration
+  src/drawio_mcp_server/
+    server.py         # MCP tools definition
+    diagram_generator.py  # Draw.io XML generation
+    templates.py      # Diagram templates (AWS, GCP, Azure, etc.)
 public/               # Static assets including example images
+.vscode/
+  mcp.json            # MCP server configuration
 ```
 
 ## TODOs
@@ -149,6 +229,7 @@ public/               # Static assets including example images
 -   [x] Allow the LLM to modify the XML instead of generating it from scratch everytime.
 -   [x] Improve the smoothness of shape streaming updates.
 -   [x] Add multiple AI provider support (OpenAI, Anthropic, Google, Azure, Ollama)
+-   [x] Add GitHub Copilot MCP integration for VS Code control
 -   [ ] Solve the bug that generation will fail for session that longer than 60s.
 
 ## License

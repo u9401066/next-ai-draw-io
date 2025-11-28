@@ -1,8 +1,13 @@
 {
   "servers": {
-    "drawio": {
-      "command": "uv",
-      "args": ["--directory", "${workspaceFolder}/mcp-server", "run", "drawio-mcp-server"]
+    "drawio-mcp-server": {
+      "command": "/home/eric/.local/bin/uv",
+      "args": [
+        "--directory",
+        "${workspaceFolder}/mcp-server",
+        "run",
+        "drawio-mcp-server"
+      ]
     }
   }
 }

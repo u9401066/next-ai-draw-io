@@ -1,13 +1,31 @@
 "use client";
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { DrawIoEmbed } from "react-drawio";
 import ChatPanel from "@/components/chat-panel";
 import { useDiagram } from "@/contexts/diagram-context";
+import { useMCPPolling } from "@/lib/use-mcp-polling";
 
 export default function Home() {
-    const { drawioRef, handleDiagramExport } = useDiagram();
+    const { drawioRef, handleDiagramExport, loadDiagram } = useDiagram();
     const [isMobile, setIsMobile] = useState(false);
     const [isChatVisible, setIsChatVisible] = useState(true);
+    const [isDrawioReady, setIsDrawioReady] = useState(false);
+
+    // Handle when Draw.io is loaded and ready
+    const handleDrawioLoad = useCallback(() => {
+        setIsDrawioReady(true);
+    }, []);
+
+    // Enable MCP polling to receive updates from GitHub Copilot
+    const { syncDiagram } = useMCPPolling({
+        onUpdate: (xml) => {
+            if (isDrawioReady) {
+                loadDiagram(xml);
+            }
+        },
+        enabled: isDrawioReady, // Only poll when Draw.io is ready
+        pollInterval: 500, // Poll every 500ms for responsive updates
+    });
 
     useEffect(() => {
         const checkMobile = () => {
@@ -57,6 +75,7 @@ export default function Home() {
                 <DrawIoEmbed
                     ref={drawioRef}
                     onExport={handleDiagramExport}
+                    onLoad={handleDrawioLoad}
                     urlParameters={{
                         spin: true,
                         libraries: false,
