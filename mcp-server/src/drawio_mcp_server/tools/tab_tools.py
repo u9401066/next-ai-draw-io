@@ -78,6 +78,65 @@ async def get_diagram_content_impl(tab_id: Optional[str] = None) -> dict:
     return result
 
 
+async def load_file_impl(file_path: str, tab_name: Optional[str] = None) -> str:
+    """
+    從檔案載入圖表到瀏覽器
+    
+    Args:
+        file_path: .drawio 或 .xml 檔案路徑
+        tab_name: 分頁名稱，不指定則使用檔名
+        
+    Returns:
+        載入結果訊息
+    """
+    path = Path(file_path)
+    
+    # 檢查檔案存在
+    if not path.exists():
+        return f"❌ 檔案不存在: {file_path}"
+    
+    # 檢查副檔名
+    if path.suffix.lower() not in ['.drawio', '.xml']:
+        return f"❌ 不支援的檔案格式: {path.suffix}（支援 .drawio, .xml）"
+    
+    # 讀取檔案
+    try:
+        xml = path.read_text(encoding='utf-8')
+    except Exception as e:
+        return f"❌ 讀取檔案失敗: {e}"
+    
+    if not xml.strip():
+        return "❌ 檔案內容為空"
+    
+    # 確保 Web 服務運行
+    if not web_client.is_running():
+        if not web_client.start_web_server():
+            return "❌ 無法啟動 Draw.io Web"
+    
+    # 使用檔名作為分頁名稱
+    name = tab_name or path.stem
+    
+    # 發送到瀏覽器
+    result = await web_client.send(
+        action="display",
+        xml=xml,
+        tab_name=name
+    )
+    
+    if "error" in result:
+        return f"❌ 載入失敗: {result['error']}"
+    
+    tab_id = result.get("tabId", "unknown")
+    
+    return f"""✅ 圖表已載入
+
+**檔案:** {path.name}
+**分頁:** {name} (ID: {tab_id})
+**大小:** {len(xml)} 字元
+
+🌐 請在瀏覽器 http://localhost:6002 查看"""
+
+
 async def save_tab_impl(
     file_path: Optional[str] = None,
     tab_id: Optional[str] = None
@@ -264,3 +323,27 @@ def register_tab_tools(mcp):
         - save_tab(file_path="/home/user/diagrams/arch.drawio", tab_id="tab-1")
         """
         return await save_tab_impl(file_path, tab_id)
+
+    @mcp.tool()
+    async def load_file(
+        file_path: str = Field(
+            description="要載入的 .drawio 或 .xml 檔案路徑"
+        ),
+        tab_name: Optional[str] = Field(
+            default=None,
+            description="分頁名稱。不指定則使用檔名"
+        )
+    ) -> str:
+        """
+        從檔案載入圖表到瀏覽器。
+        
+        使用情境：
+        - 用戶說「開啟 xxx.drawio」
+        - 用戶說「載入這個圖表」
+        - 繼續編輯之前存檔的圖表
+        
+        範例：
+        - load_file(file_path="./figures/flowchart.drawio")
+        - load_file(file_path="/home/user/diagram.drawio", tab_name="My Diagram")
+        """
+        return await load_file_impl(file_path, tab_name)

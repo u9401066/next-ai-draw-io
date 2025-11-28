@@ -8,7 +8,7 @@ import { useMCPPolling } from "@/lib/use-mcp-polling";
 export default function Home() {
     const { drawioRef, handleDiagramExport, loadDiagram } = useDiagram();
     const [isMobile, setIsMobile] = useState(false);
-    const [isChatVisible, setIsChatVisible] = useState(true);
+    const [isChatVisible, setIsChatVisible] = useState(false); // 預設隱藏 Chat Panel
     const [isDrawioReady, setIsDrawioReady] = useState(false);
 
     // Handle when Draw.io is loaded and ready
@@ -24,7 +24,11 @@ export default function Home() {
     // This will: 1) Download the file locally, 2) Report event to MCP for Agent
     const handleSave = useCallback(async (data: EventSave) => {
         const now = Date.now();
-        console.log('[Draw.io] User save event:', data);
+        console.log('[Draw.io] User save event:', {
+            hasXml: !!data.xml,
+            xmlLength: data.xml?.length,
+            xmlPrefix: data.xml?.substring?.(0, 100),
+        });
         
         // 1. 觸發檔案下載（真正存檔）- 防止短時間內重複下載
         if (now - lastSaveRef.current > SAVE_DEBOUNCE_MS) {

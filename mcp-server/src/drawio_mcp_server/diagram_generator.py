@@ -3,11 +3,29 @@
 """
 
 import re
+import html
 import xml.etree.ElementTree as ET
 from typing import Optional, Tuple
 import base64
 import zlib
 from datetime import datetime
+
+
+def encode_non_ascii_to_entities(text: str) -> str:
+    """
+    將非 ASCII 字符轉換為 HTML 數字實體編碼
+    這可以避免 Draw.io embed 在處理 XML 時的編碼問題
+    
+    例如: "喵~" -> "&#21941;~"
+    """
+    result = []
+    for char in text:
+        if ord(char) > 127:
+            # 非 ASCII 字符轉換為數字實體
+            result.append(f"&#{ord(char)};")
+        else:
+            result.append(char)
+    return ''.join(result)
 
 
 class DiagramGenerator:
@@ -57,11 +75,16 @@ class DiagramGenerator:
         """
         包裝成瀏覽器可直接載入的完整 mxfile 格式
         react-drawio 的 load() 方法需要完整的 mxfile XML
+        
+        注意：非 ASCII 字符會被轉換為 HTML 數字實體，以避免編碼問題
         """
+        # 將非 ASCII 字符轉換為 HTML 實體編碼
+        encoded_root_xml = encode_non_ascii_to_entities(root_xml)
+        
         return f'''<mxfile host="drawio-mcp" modified="{self._get_timestamp()}" agent="Draw.io MCP Server" version="24.0.0" type="device">
   <diagram id="diagram-1" name="Page-1">
     <mxGraphModel dx="1200" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
-      {root_xml}
+      {encoded_root_xml}
     </mxGraphModel>
   </diagram>
 </mxfile>'''

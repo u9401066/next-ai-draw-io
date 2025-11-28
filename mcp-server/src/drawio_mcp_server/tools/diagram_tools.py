@@ -8,7 +8,7 @@ from pydantic import Field
 
 from ..config import config
 from ..web_client import web_client
-from ..diagram_generator import DiagramGenerator
+from ..diagram_generator import DiagramGenerator, encode_non_ascii_to_entities
 from ..validator import DiagramValidator, validate_and_fix
 
 
@@ -55,6 +55,9 @@ async def display_xml_impl(
                 # 假設是 root 內容，需要包裝
                 xml = f"<root>\n  <mxCell id=\"0\"/>\n  <mxCell id=\"1\" parent=\"0\"/>\n{xml}\n</root>"
             xml = generator._wrap_for_browser(xml)
+        else:
+            # 已經是完整的 mxfile 格式，但仍需要編碼非 ASCII 字符
+            xml = encode_non_ascii_to_entities(xml)
         
         return await _send_xml_to_browser(
             xml=xml,

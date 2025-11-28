@@ -55,6 +55,14 @@ function getOrCreateTab(tabId?: string, tabName?: string): TabState {
   return newTab;
 }
 
+// 用於請求瀏覽器 export 最新內容
+let exportRequest: { 
+  requestId: string; 
+  timestamp: number;
+  resolved: boolean;
+  xml?: string;
+} | null = null;
+
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const action = searchParams.get('action');
@@ -68,6 +76,48 @@ export async function GET(req: NextRequest) {
       tabs: tabs.map(t => ({ id: t.id, name: t.name, active: t.id === activeTabId })),
       timestamp: Date.now() 
     });
+  }
+
+  // 新增：請求瀏覽器 export 最新內容
+  if (action === 'request_export') {
+    const requestId = `export-${Date.now()}`;
+    exportRequest = {
+      requestId,
+      timestamp: Date.now(),
+      resolved: false,
+    };
+    return NextResponse.json({
+      requestId,
+      message: 'Export requested, browser should respond soon',
+    });
+  }
+
+  // 新增：檢查 export 結果
+  if (action === 'get_export_result') {
+    const requestId = searchParams.get('requestId');
+    if (!exportRequest || exportRequest.requestId !== requestId) {
+      return NextResponse.json({ error: 'No matching export request' }, { status: 404 });
+    }
+    if (!exportRequest.resolved) {
+      return NextResponse.json({ pending: true });
+    }
+    const result = {
+      xml: exportRequest.xml,
+      resolved: true,
+    };
+    exportRequest = null; // 清除已完成的請求
+    return NextResponse.json(result);
+  }
+
+  // 新增：檢查是否有 export 請求（給瀏覽器 polling 用）
+  if (action === 'check_export_request') {
+    if (exportRequest && !exportRequest.resolved) {
+      return NextResponse.json({
+        hasRequest: true,
+        requestId: exportRequest.requestId,
+      });
+    }
+    return NextResponse.json({ hasRequest: false });
   }
 
   if (action === 'poll') {
@@ -296,6 +346,33 @@ export async function POST(req: NextRequest) {
         message: `User ${eventType} event recorded`,
         eventId: event.timestamp,
       });
+    }
+
+    // 新增：瀏覽器回傳 export 結果
+    if (action === 'export_result') {
+      const { requestId } = body;
+      if (exportRequest && exportRequest.requestId === requestId) {
+        exportRequest.resolved = true;
+        exportRequest.xml = xml;
+        
+        // 同時更新 tab 內容
+        if (activeTabId) {
+          const tab = tabs.find(t => t.id === activeTabId);
+          if (tab && xml) {
+            tab.xml = xml;
+          }
+        }
+        
+        return NextResponse.json({ success: true, message: 'Export result received' });
+      }
+      return NextResponse.json({ error: 'No matching export request' }, { status: 404 });
+    }
+
+    // Debug log from browser
+    if (action === 'debug_log') {
+      const { message, ...rest } = body;
+      console.log(`[BROWSER DEBUG] ${message}`, JSON.stringify(rest, null, 2));
+      return NextResponse.json({ success: true });
     }
 
     return NextResponse.json({ error: 'Unknown action' }, { status: 400 });

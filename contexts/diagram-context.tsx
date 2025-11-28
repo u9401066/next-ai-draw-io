@@ -44,19 +44,58 @@ export function DiagramProvider({ children }: { children: React.ReactNode }) {
     };
 
     const handleDiagramExport = (data: any) => {
-        const extractedXML = extractDiagramXML(data.data);
-        setChartXML(extractedXML);
-        setLatestSvg(data.data);
-        setDiagramHistory((prev) => [
-            ...prev,
-            {
-                svg: data.data,
-                xml: extractedXML,
-            },
-        ]);
-        if (resolverRef.current) {
-            resolverRef.current(extractedXML);
-            resolverRef.current = null;
+        console.log("[DiagramContext] handleDiagramExport called with data:", {
+            format: data.format,
+            dataType: typeof data.data,
+            dataPrefix: data.data?.substring?.(0, 100),
+            message: data.message,
+        });
+        
+        // Log debug info to server for easier debugging
+        fetch('/api/mcp', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'debug_log',
+                message: 'handleDiagramExport called',
+                dataType: typeof data.data,
+                dataPrefix: data.data?.substring?.(0, 100),
+                format: data.format,
+            }),
+        }).catch(() => {});
+        
+        try {
+            const extractedXML = extractDiagramXML(data.data);
+            if (extractedXML) {
+                setChartXML(extractedXML);
+                setLatestSvg(data.data);
+                setDiagramHistory((prev) => [
+                    ...prev,
+                    {
+                        svg: data.data,
+                        xml: extractedXML,
+                    },
+                ]);
+                if (resolverRef.current) {
+                    resolverRef.current(extractedXML);
+                    resolverRef.current = null;
+                }
+            }
+        } catch (error) {
+            console.error("handleDiagramExport: Failed to extract XML", error);
+            // Log error to server
+            fetch('/api/mcp', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: 'debug_log',
+                    message: 'extractDiagramXML FAILED',
+                    error: String(error),
+                    dataPrefix: data.data?.substring?.(0, 200),
+                }),
+            }).catch(() => {});
+            // Still store the raw data even if extraction fails
+            setLatestSvg(data.data);
         }
     };
 

@@ -308,8 +308,46 @@ export function replaceXMLParts(
 
 export function extractDiagramXML(xml_svg_string: string): string {
   try {
+    // Check if input is valid
+    if (!xml_svg_string || typeof xml_svg_string !== 'string') {
+      console.warn("extractDiagramXML: Invalid input");
+      return "";
+    }
+
     // 1. Parse the SVG string (using built-in DOMParser in a browser-like environment)
-    const svgString = atob(xml_svg_string.slice(26));
+    // The input should be a data URL like: data:image/svg+xml;base64,...
+    if (!xml_svg_string.startsWith('data:image/svg+xml;base64,')) {
+      console.warn("extractDiagramXML: Input is not a base64 SVG data URL, returning as-is");
+      return xml_svg_string; // Return as-is if not the expected format
+    }
+
+    let base64Part = xml_svg_string.slice(26);
+    
+    // Clean up base64 string - remove any whitespace and ensure proper padding
+    base64Part = base64Part.replace(/\s/g, '');
+    // Ensure proper padding
+    while (base64Part.length % 4 !== 0) {
+      base64Part += '=';
+    }
+    
+    // Try to decode base64, handling potential encoding issues
+    let svgString: string;
+    try {
+      // For UTF-8 content in base64, we need to properly decode
+      // First decode base64 to binary, then decode as UTF-8
+      const binaryString = atob(base64Part);
+      // Check if it contains multi-byte UTF-8 sequences
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      svgString = new TextDecoder('utf-8').decode(bytes);
+    } catch (e) {
+      console.error("extractDiagramXML: Failed to decode base64 SVG", e);
+      console.debug("extractDiagramXML: base64 sample (first 100 chars):", base64Part.slice(0, 100));
+      return "";
+    }
+
     const parser = new DOMParser();
     const svgDoc = parser.parseFromString(svgString, "image/svg+xml");
     const svgElement = svgDoc.querySelector('svg');
@@ -346,8 +384,17 @@ export function extractDiagramXML(xml_svg_string: string): string {
       throw new Error("No encoded data found in the diagram element");
     }
 
-    // 6. Decode base64 data
-    const binaryString = atob(base64EncodedData);
+    // 6. Decode base64 data (with error handling for encoding issues)
+    let binaryString: string;
+    try {
+      // Clean up any whitespace in base64 data
+      const cleanBase64 = base64EncodedData.replace(/\s/g, '');
+      binaryString = atob(cleanBase64);
+    } catch (e) {
+      console.error("extractDiagramXML: Failed to decode diagram base64", e);
+      // Try to handle as uncompressed XML
+      return base64EncodedData;
+    }
 
     // 7. Convert binary string to Uint8Array
     const len = binaryString.length;
@@ -357,7 +404,14 @@ export function extractDiagramXML(xml_svg_string: string): string {
     }
 
     // 8. Decompress data using pako (equivalent to zlib.decompress with wbits=-15)
-    const decompressedData = pako.inflate(bytes, { windowBits: -15 });
+    let decompressedData: Uint8Array;
+    try {
+      decompressedData = pako.inflate(bytes, { windowBits: -15 });
+    } catch (e) {
+      console.error("extractDiagramXML: Failed to decompress data", e);
+      // If decompression fails, try as raw string
+      return new TextDecoder('utf-8').decode(bytes);
+    }
 
     // 9. Convert the decompressed data to a string
     const decoder = new TextDecoder('utf-8');

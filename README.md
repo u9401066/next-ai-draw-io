@@ -171,6 +171,7 @@ npm run dev
 | `create_diagram` | Create a new diagram from description or custom XML |
 | `edit_diagram` | Edit an existing diagram |
 | `read_diagram` | Read and describe diagram contents |
+| `load_file` | Load existing .drawio file into browser editor |
 | `save_tab` | Save diagram to .drawio file (smart: asks user if path not specified) |
 | `get_diagram_content` | Get diagram XML content |
 | `get_user_events` | Query user operations in browser (pull model for privacy) |
@@ -315,6 +316,8 @@ public/               # Static assets including example images
 -   [x] Add smart save workflow with user path query (2024-11-28)
 -   [x] Add user event query system (pull model for privacy) (2024-11-28)
 -   [x] Browser save button triggers file download (2024-11-28)
+-   [x] Add load_file tool for opening existing .drawio files (2024-11-28)
+-   [x] Add debug logging system for frontend-to-backend error reporting (2024-11-28)
 -   [ ] MCP-to-MCP collaboration for project diagram management
 -   [ ] Solve the bug that generation will fail for session that longer than 60s.
 
