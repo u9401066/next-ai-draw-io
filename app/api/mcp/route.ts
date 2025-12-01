@@ -1,5 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+// WebSocket Server 設定（獨立運行）
+const WS_API_URL = process.env.WS_API_URL || 'http://localhost:6004';
+const USE_WEBSOCKET = process.env.NEXT_PUBLIC_USE_WEBSOCKET !== 'false';
+
+// 轉發請求到 WebSocket Server
+async function forwardToWsServer(action: string, data?: any): Promise<Response | null> {
+  if (!USE_WEBSOCKET) return null;
+  
+  try {
+    if (data) {
+      return await fetch(WS_API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, ...data }),
+      });
+    } else {
+      return await fetch(`${WS_API_URL}?action=${action}`);
+    }
+  } catch (error) {
+    console.log('[API] WebSocket server not available, using fallback');
+    return null;
+  }
+}
+
 // 分頁狀態
 interface TabState {
   id: string;
@@ -262,7 +286,13 @@ export async function POST(req: NextRequest) {
     const { action, xml, edits, tabId, tabName } = body;
 
     if (action === 'display') {
-      // 顯示新圖表（在指定分頁或新分頁）
+      // 嘗試透過 WebSocket 推送
+      const wsResponse = await forwardToWsServer('display', { xml, tabId, tabName });
+      if (wsResponse?.ok) {
+        console.log('[API] Diagram pushed via WebSocket');
+      }
+      
+      // 同時更新本地狀態（作為 fallback）
       const tab = getOrCreateTab(tabId, tabName);
       tab.xml = xml;
       if (tabName) tab.name = tabName;
@@ -286,7 +316,8 @@ export async function POST(req: NextRequest) {
         message: 'Diagram displayed',
         tabId: tab.id,
         tabName: tab.name,
-        timestamp 
+        timestamp,
+        wsForwarded: wsResponse?.ok ?? false,
       });
     }
 
@@ -467,19 +498,29 @@ export async function POST(req: NextRequest) {
     if (action === 'apply_operations') {
       // MCP 請求應用增量操作到圖表
       const { operations, preserveUserChanges = true, requestId } = body;
+      const opRequestId = requestId || `op-${Date.now()}`;
       
+      // 嘗試透過 WebSocket 推送
+      const wsResponse = await forwardToWsServer('apply_operations', { 
+        operations, 
+        preserveUserChanges,
+        requestId: opRequestId,
+      });
+      
+      // 同時更新本地狀態（作為 fallback）
       pendingOperations.push({
         operations,
         preserveUserChanges,
-        requestId: requestId || `op-${Date.now()}`,
+        requestId: opRequestId,
         timestamp: Date.now(),
         resolved: false,
       });
       
       return NextResponse.json({
         success: true,
-        requestId: requestId || `op-${Date.now()}`,
+        requestId: opRequestId,
         message: 'Operations queued for browser execution',
+        wsForwarded: wsResponse?.ok ?? false,
       });
     }
     

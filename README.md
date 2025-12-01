@@ -294,11 +294,46 @@ The tool description includes complete XML format documentation with:
 └─────────────────┘                      └────────┬────────┘
                                                   │ HTTP
                                                   ▼
-┌─────────────────┐     Polling          ┌─────────────────┐
-│  Browser        │◄───────────────────►│  Next.js API    │
-│  (Draw.io)      │                      │  (/api/mcp)     │
-└─────────────────┘                      └─────────────────┘
+┌─────────────────┐                      ┌─────────────────┐
+│  Browser        │◄─── WebSocket ──────►│  WS Server      │
+│  (Draw.io)      │     (Port 6003)      │  (Node.js)      │
+└─────────────────┘                      └────────┬────────┘
+                                                  │ HTTP (fallback)
+                                                  ▼
+                                         ┌─────────────────┐
+                                         │  Next.js API    │
+                                         │  (Port 6002)    │
+                                         └─────────────────┘
 ```
+
+### WebSocket Real-time Communication (New!)
+
+The application now supports WebSocket for real-time bidirectional communication between the browser and server, replacing the previous polling mechanism.
+
+**Benefits:**
+- **Instant updates** - No more 2-3 second polling delays
+- **Reduced overhead** - No unnecessary HTTP requests
+- **Better UX** - Real-time diagram synchronization
+
+**Starting the servers:**
+
+```bash
+# Option 1: Start separately
+npm run dev:ws   # Start WebSocket server (port 6003/6004)
+npm run dev      # Start Next.js (port 6002)
+
+# Option 2: Start together
+npm run dev:all
+```
+
+**Architecture:**
+| Component | Port | Role |
+|-----------|------|------|
+| Next.js | 6002 | Web UI + API (fallback) |
+| WebSocket | 6003 | Browser ↔ Server real-time |
+| WS HTTP API | 6004 | MCP → WebSocket forwarding |
+
+**Fallback:** If WebSocket is unavailable, the system automatically falls back to HTTP polling.
 
 ## Deployment
 
@@ -321,14 +356,25 @@ components/           # React components
   chat-input.tsx      # User input component for AI interaction
   chatPanel.tsx       # Chat interface with diagram control
   ui/                 # UI components (buttons, cards, etc.)
+contexts/             # React contexts
+  diagram-context.tsx # Diagram state + WebSocket integration
 lib/                  # Utility functions and helpers
   utils.ts            # General utilities including XML conversion
-  use-mcp-polling.ts  # React hook for MCP polling
+  use-mcp-polling.ts  # React hook for MCP polling (fallback)
+  websocket/          # WebSocket module
+    types.ts          # Message type definitions
+    server.ts         # Server-side WebSocket manager
+    useWebSocket.ts   # React hook for client connection
+scripts/              # Utility scripts
+  ws-server.ts        # Standalone WebSocket server
+  start-dev.sh        # Smart dev server startup
 mcp-server/           # Python MCP Server for GitHub Copilot integration
   src/drawio_mcp_server/
     server.py         # MCP tools definition
     diagram_generator.py  # Draw.io XML generation
     templates.py      # Diagram templates (AWS, GCP, Azure, etc.)
+    tools/            # MCP tool modules
+      diff_tools.py   # Incremental editing tools
 public/               # Static assets including example images
 .vscode/
   mcp.json            # MCP server configuration
@@ -348,6 +394,8 @@ public/               # Static assets including example images
 -   [x] Add load_file tool for opening existing .drawio files (2024-11-28)
 -   [x] Add debug logging system for frontend-to-backend error reporting (2024-11-28)
 -   [x] Add drawing guidelines tools (edges, colors, shapes, layout) (2024-11-29)
+-   [x] Add incremental editing system (diff-based XML editing) (2024-12-01)
+-   [x] Add WebSocket for real-time communication (2024-12-01)
 -   [ ] MCP-to-MCP collaboration for project diagram management
 -   [ ] Solve the bug that generation will fail for session that longer than 60s.
 

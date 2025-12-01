@@ -4,6 +4,8 @@
     "private": true,
     "scripts": {
         "dev": "next dev --turbopack --port 6002",
+        "dev:ws": "npx tsx scripts/ws-server.ts",
+        "dev:all": "concurrently \"npm run dev\" \"npm run dev:ws\"",
         "build": "next build",
         "start": "next start --port 6001",
         "lint": "next lint"
@@ -20,6 +22,7 @@
         "@radix-ui/react-scroll-area": "^1.2.3",
         "@radix-ui/react-slot": "^1.1.2",
         "@radix-ui/react-tooltip": "^1.1.8",
+        "@types/ws": "^8.18.1",
         "@vercel/analytics": "^1.5.0",
         "@xmldom/xmldom": "^0.9.8",
         "ai": "^5.0.89",
@@ -38,6 +41,7 @@
         "remark-gfm": "^4.0.1",
         "tailwind-merge": "^3.0.2",
         "tailwindcss-animate": "^1.0.7",
+        "ws": "^8.18.3",
         "zod": "^4.1.12"
     },
     "devDependencies": {
@@ -46,7 +50,9 @@
         "@types/pako": "^2.0.3",
         "@types/react": "^19",
         "@types/react-dom": "^19",
+        "concurrently": "^9.2.1",
         "tailwindcss": "^4",
+        "tsx": "^4.21.0",
         "typescript": "^5"
     }
 }
