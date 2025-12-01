@@ -1,14 +1,22 @@
 "use client";
 
-import type React from "react";
 import { useRef, useEffect, useState, useCallback } from "react";
 import Image from "next/image";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import ExamplePanel from "./chat-example-panel";
 import { UIMessage } from "ai";
 import { convertToLegalXml, replaceNodes } from "@/lib/utils";
+import { Copy, Check, X } from "lucide-react";
 
 import { useDiagram } from "@/contexts/diagram-context";
+
+const getMessageTextContent = (message: UIMessage): string => {
+    if (!message.parts) return "";
+    return message.parts
+        .filter((part: any) => part.type === "text")
+        .map((part: any) => part.text)
+        .join("\n");
+};
 
 interface ChatMessageDisplayProps {
     messages: UIMessage[];
@@ -30,6 +38,21 @@ export function ChatMessageDisplay({
     const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>(
         {}
     );
+    const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+    const [copyFailedMessageId, setCopyFailedMessageId] = useState<string | null>(null);
+
+    const copyMessageToClipboard = async (messageId: string, text: string) => {
+        try {
+            await navigator.clipboard.writeText(text);
+            setCopiedMessageId(messageId);
+            setTimeout(() => setCopiedMessageId(null), 2000);
+        } catch (err) {
+            console.error("Failed to copy message:", err);
+            setCopyFailedMessageId(messageId);
+            setTimeout(() => setCopyFailedMessageId(null), 2000);
+        }
+    };
+
     const handleDisplayChart = useCallback(
         (xml: string) => {
             const currentXml = xml || "";
@@ -160,20 +183,41 @@ export function ChatMessageDisplay({
             {messages.length === 0 ? (
                 <ExamplePanel setInput={setInput} setFiles={setFiles} />
             ) : (
-                messages.map((message) => (
+                messages.map((message) => {
+                    const messageText = getMessageTextContent(message);
+                    const isCopied = copiedMessageId === message.id;
+                    const isCopyFailed = copyFailedMessageId === message.id;
+                    
+                    return (
                     <div
                         key={message.id}
-                        className={`mb-4 ${
+                        className={`mb-4 group ${
                             message.role === "user" ? "text-right" : "text-left"
                         }`}
                     >
                         <div
-                            className={`inline-block px-4 py-2 whitespace-pre-wrap text-sm rounded-lg max-w-[85%] break-words ${
+                            className={`relative inline-block px-4 py-2 whitespace-pre-wrap text-sm rounded-lg max-w-[85%] break-words ${
                                 message.role === "user"
                                     ? "bg-primary text-primary-foreground"
                                     : "bg-muted text-muted-foreground"
                             }`}
                         >
+                            {/* Copy button for user messages */}
+                            {message.role === "user" && messageText && (
+                                <button
+                                    onClick={() => copyMessageToClipboard(message.id, messageText)}
+                                    className="absolute -left-8 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-gray-200 opacity-0 group-hover:opacity-100 transition-opacity"
+                                    title="Copy message"
+                                >
+                                    {isCopied ? (
+                                        <Check className="w-4 h-4 text-green-600" />
+                                    ) : isCopyFailed ? (
+                                        <X className="w-4 h-4 text-red-600" />
+                                    ) : (
+                                        <Copy className="w-4 h-4 text-gray-500" />
+                                    )}
+                                </button>
+                            )}
                             {message.parts?.map((part: any, index: number) => {
                                 switch (part.type) {
                                     case "text":
@@ -204,7 +248,8 @@ export function ChatMessageDisplay({
                             })}
                         </div>
                     </div>
-                ))
+                    );
+                })
             )}
             {error && (
                 <div className="text-red-500 text-sm mt-2">

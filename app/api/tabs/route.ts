@@ -170,25 +170,3 @@ export async function POST(req: NextRequest) {
     );
   }
 }
-
-// 匯出以便其他模組使用
-export function getActiveTab(): Tab | undefined {
-  return tabs.find(t => t.id === activeTabId);
-}
-
-export function createTab(name: string, xml: string): Tab {
-  const newTab: Tab = {
-    id: generateTabId(),
-    name,
-    xml,
-    active: true,
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-  };
-  
-  tabs.forEach(t => t.active = false);
-  tabs.push(newTab);
-  activeTabId = newTab.id;
-  
-  return newTab;
-}

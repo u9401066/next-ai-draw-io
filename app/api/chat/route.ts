@@ -2,7 +2,7 @@ import { streamText, convertToModelMessages } from 'ai';
 import { getAIModel } from '@/lib/ai-providers';
 import { z } from "zod";
 
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 export async function POST(req: Request) {
   try {
@@ -90,7 +90,21 @@ ${lastMessageText}
 
     // Convert UIMessages to ModelMessages and add system message
     const modelMessages = convertToModelMessages(messages);
-    let enhancedMessages = [...modelMessages];
+    
+    // Log messages with empty content for debugging (helps identify root cause)
+    const emptyMessages = modelMessages.filter((msg: any) =>
+      !msg.content || !Array.isArray(msg.content) || msg.content.length === 0
+    );
+    if (emptyMessages.length > 0) {
+      console.warn('[Chat API] Messages with empty content detected:',
+        JSON.stringify(emptyMessages.map((m: any) => ({ role: m.role, contentLength: m.content?.length })))
+      );
+    }
+
+    // Filter out messages with empty content arrays (Bedrock API rejects these)
+    let enhancedMessages = modelMessages.filter((msg: any) =>
+      msg.content && Array.isArray(msg.content) && msg.content.length > 0
+    );
 
     // Update the last message with formatted content if it's a user message
     if (enhancedMessages.length >= 1) {
