@@ -7,6 +7,7 @@ from .tab_tools import register_tab_tools
 from .diagram_tools import register_diagram_tools
 from .template_tools import register_template_tools
 from .web_tools import register_web_tools
+from .guideline_tools import register_guideline_tools
 
 
 def register_all_tools(mcp):
@@ -15,6 +16,7 @@ def register_all_tools(mcp):
     register_template_tools(mcp)
     register_tab_tools(mcp)
     register_web_tools(mcp)
+    register_guideline_tools(mcp)
 
 
 __all__ = [
@@ -23,4 +25,5 @@ __all__ = [
     "register_diagram_tools", 
     "register_template_tools",
     "register_web_tools",
+    "register_guideline_tools",
 ]

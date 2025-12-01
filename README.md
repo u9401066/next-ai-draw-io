@@ -183,6 +183,35 @@ npm run dev
 | `list_tabs` | List all open diagram tabs |
 | `switch_tab` | Switch to a specific tab |
 | `close_tab` | Close a diagram tab |
+| `get_drawing_guidelines` | Get drawing best practices (edges, colors, shapes, layout) |
+| `get_style_string` | Generate Draw.io style strings |
+| `list_available_styles` | List all available styles and colors |
+
+### Drawing Guidelines
+
+The MCP server includes built-in drawing guidelines to ensure professional diagrams:
+
+**Edge Styles (推薦使用正交轉角線):**
+- `orthogonal` - Orthogonal edges with rounded corners (recommended)
+- `straight` - Direct lines
+- `curved` - Curved edges
+- `entityRelation` - For ER diagrams
+
+**Color Palette:**
+| Color | Fill | Stroke | Usage |
+|-------|------|--------|-------|
+| Blue | #dae8fc | #6c8ebf | Process steps |
+| Green | #d5e8d4 | #82b366 | Start/Success |
+| Yellow | #fff2cc | #d6b656 | Decision |
+| Orange | #ffe6cc | #d79b00 | Output/Warning |
+| Purple | #e1d5e7 | #9673a6 | External system |
+| Red | #f8cecc | #b85450 | End/Error |
+
+**Layout Guidelines:**
+- Horizontal spacing: 60px
+- Vertical spacing: 40px
+- Canvas margins: 40px
+- Grid size: 20px
 
 ### Smart Save Workflow
 
@@ -318,6 +347,7 @@ public/               # Static assets including example images
 -   [x] Browser save button triggers file download (2024-11-28)
 -   [x] Add load_file tool for opening existing .drawio files (2024-11-28)
 -   [x] Add debug logging system for frontend-to-backend error reporting (2024-11-28)
+-   [x] Add drawing guidelines tools (edges, colors, shapes, layout) (2024-11-29)
 -   [ ] MCP-to-MCP collaboration for project diagram management
 -   [ ] Solve the bug that generation will fail for session that longer than 60s.
 
