@@ -166,13 +166,16 @@ export function DiagramProvider({ children }: { children: React.ReactNode }) {
 
     // === WebSocket 處理 ===
     
+    // 用 ref 保存 sendOperationResult 避免循環依賴
+    const sendOperationResultRef = useRef<typeof sendOperationResult | null>(null);
+    
     // 處理圖表更新訊息
     const handleDiagramUpdateWS = useCallback((payload: DiagramUpdateMessage['payload']) => {
         console.log('[DiagramContext WS] Diagram update received:', payload.action);
         loadDiagram(payload.xml);
         setChartXML(payload.xml);
         setActiveTabId(payload.tabId);
-    }, [loadDiagram]);
+    }, []);
     
     // 處理待執行操作訊息
     const handlePendingOperationsWS = useCallback((payload: PendingOperationsMessage['payload']) => {
@@ -180,8 +183,8 @@ export function DiagramProvider({ children }: { children: React.ReactNode }) {
         
         const result = applyOperations(payload.operations, payload.preserveUserChanges);
         
-        // 透過 WebSocket 回報結果
-        sendOperationResult(
+        // 透過 WebSocket 回報結果（使用 ref 避免循環依賴）
+        sendOperationResultRef.current?.(
             payload.requestId,
             result.success,
             result.applied,
@@ -212,6 +215,11 @@ export function DiagramProvider({ children }: { children: React.ReactNode }) {
             console.log('[DiagramContext] WebSocket disconnected');
         },
     });
+    
+    // 更新 ref
+    useEffect(() => {
+        sendOperationResultRef.current = sendOperationResult;
+    }, [sendOperationResult]);
     
     // 當 tab 變更時重新訂閱
     useEffect(() => {

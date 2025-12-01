@@ -57,6 +57,24 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const heartbeatIntervalRef = useRef<NodeJS.Timeout | null>(null);
   
+  // 使用 ref 儲存 callbacks 避免重連
+  const callbacksRef = useRef({
+    onDiagramUpdate,
+    onPendingOperations,
+    onConnected,
+    onDisconnected,
+  });
+  
+  // 更新 callbacks ref
+  useEffect(() => {
+    callbacksRef.current = {
+      onDiagramUpdate,
+      onPendingOperations,
+      onConnected,
+      onDisconnected,
+    };
+  }, [onDiagramUpdate, onPendingOperations, onConnected, onDisconnected]);
+  
   const [isConnected, setIsConnected] = useState(false);
   const [clientId, setClientId] = useState<string | null>(null);
 
@@ -76,18 +94,18 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
         case 'connection_ack':
           const ackPayload = message.payload as { clientId: string };
           setClientId(ackPayload.clientId);
-          onConnected?.(ackPayload.clientId);
+          callbacksRef.current.onConnected?.(ackPayload.clientId);
           console.log('[WS Client] Connected with ID:', ackPayload.clientId);
           break;
 
         case 'diagram_update':
           const updatePayload = (message as DiagramUpdateMessage).payload;
-          onDiagramUpdate?.(updatePayload);
+          callbacksRef.current.onDiagramUpdate?.(updatePayload);
           break;
 
         case 'pending_operations':
           const opsPayload = (message as PendingOperationsMessage).payload;
-          onPendingOperations?.(opsPayload);
+          callbacksRef.current.onPendingOperations?.(opsPayload);
           break;
 
         case 'pong':
@@ -100,11 +118,18 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
     } catch (error) {
       console.error('[WS Client] Error parsing message:', error);
     }
-  }, [onConnected, onDiagramUpdate, onPendingOperations]);
+  }, []); // 移除依賴，使用 ref
 
   // 建立連線
   const connect = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
+    // 如果沒有 URL，不連線
+    if (!url) {
+      console.log('[WS Client] No URL provided, skipping connection');
+      return;
+    }
+    
+    if (wsRef.current?.readyState === WebSocket.OPEN || 
+        wsRef.current?.readyState === WebSocket.CONNECTING) {
       return;
     }
 
@@ -133,7 +158,7 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
         console.log('[WS Client] Connection closed');
         setIsConnected(false);
         setClientId(null);
-        onDisconnected?.();
+        callbacksRef.current.onDisconnected?.();
         
         // 清理心跳
         if (heartbeatIntervalRef.current) {
@@ -153,7 +178,7 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
     } catch (error) {
       console.error('[WS Client] Failed to connect:', error);
     }
-  }, [url, handleMessage, sendMessage, heartbeatInterval, reconnectInterval, onDisconnected]);
+  }, [url, handleMessage, sendMessage, heartbeatInterval, reconnectInterval]); // 移除 onDisconnected 依賴
 
   // 初始化連線
   useEffect(() => {

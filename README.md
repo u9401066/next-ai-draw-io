@@ -396,6 +396,7 @@ public/               # Static assets including example images
 -   [x] Add drawing guidelines tools (edges, colors, shapes, layout) (2024-11-29)
 -   [x] Add incremental editing system (diff-based XML editing) (2024-12-01)
 -   [x] Add WebSocket for real-time communication (2024-12-01)
+-   [x] Fix WebSocket connection stability (useRef for callbacks) (2024-12-01)
 -   [ ] MCP-to-MCP collaboration for project diagram management
 -   [ ] Solve the bug that generation will fail for session that longer than 60s.
 
