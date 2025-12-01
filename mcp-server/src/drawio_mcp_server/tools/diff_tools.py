@@ -5,6 +5,8 @@ Draw.io MCP Tools - Diff-Based Editing
 這個模組提供基於差異的圖表編輯，而不是每次傳送完整 XML。
 """
 
+import asyncio
+import time
 from typing import Optional, List, Dict, Any, Literal
 from dataclasses import dataclass
 from enum import Enum
@@ -133,18 +135,14 @@ async def get_diagram_changes_impl(
     """
     取得用戶在瀏覽器中對圖表的變更
     """
-    from .web_client import web_client
+    from ..web_client import web_client
     
     try:
         # 從 Browser 取得變更
-        response = await web_client.send_command({
-            "action": "get_changes",
-            "since_last_sync": since_last_sync,
-            "include_details": include_details,
-        })
+        response = await web_client.get_diagram_changes()
         
-        if not response.get("success"):
-            return "無法取得變更資訊"
+        if "error" in response:
+            return f"無法取得變更資訊: {response['error']}"
         
         changes = response.get("changes", {})
         
@@ -197,39 +195,52 @@ async def apply_diagram_changes_impl(
     """
     應用一系列操作到圖表
     """
-    from .web_client import web_client
+    from ..web_client import web_client
+    import time
     
     if not operations:
         return "沒有要執行的操作。"
     
     try:
+        # 生成請求 ID
+        request_id = f"op-{int(time.time() * 1000)}"
+        
         # 發送操作到 Browser
-        response = await web_client.send_command({
-            "action": "apply_changes",
-            "operations": operations,
-            "preserve_user_changes": preserve_user_changes,
-        })
+        response = await web_client.apply_diagram_operations(
+            operations=operations,
+            preserve_user_changes=preserve_user_changes,
+            request_id=request_id,
+        )
         
-        if not response.get("success"):
-            error = response.get("error", "未知錯誤")
-            return f"應用變更失敗: {error}"
+        if "error" in response:
+            return f"應用變更失敗: {response['error']}"
         
-        applied = response.get("applied", 0)
-        conflicts = response.get("conflicts", [])
+        # 等待 Browser 執行（最多 10 秒）
+        for _ in range(20):  # 每 0.5 秒檢查一次
+            await asyncio.sleep(0.5)
+            result = await web_client.get_apply_result(request_id)
+            
+            if "error" in result and result["error"] != "No matching operation":
+                return f"取得結果失敗: {result['error']}"
+            
+            if result.get("pending"):
+                continue
+            
+            if result.get("success"):
+                apply_result = result.get("result", {})
+                applied = apply_result.get("applied", len(operations))
+                conflicts = apply_result.get("conflicts", [])
+                
+                result_parts = [f"✅ 成功應用 {applied} 個操作"]
+                
+                if conflicts:
+                    result_parts.append(f"⚠️ 有 {len(conflicts)} 個衝突:")
+                    for conflict in conflicts:
+                        result_parts.append(f"  - {conflict.get('description', '未知衝突')}")
+                
+                return "\n".join(result_parts)
         
-        result_parts = [f"✅ 成功應用 {applied} 個操作"]
-        
-        if conflicts:
-            result_parts.append(f"⚠️ 有 {len(conflicts)} 個衝突:")
-            for conflict in conflicts:
-                result_parts.append(f"  - {conflict.get('description', '未知衝突')}")
-        
-        if response.get("new_state_summary"):
-            result_parts.append("")
-            result_parts.append("目前圖表狀態:")
-            result_parts.append(response["new_state_summary"])
-        
-        return "\n".join(result_parts)
+        return "⏳ 操作已發送，但等待結果超時。Browser 可能還在處理中。"
         
     except Exception as e:
         return f"應用變更時發生錯誤: {str(e)}"
@@ -239,25 +250,28 @@ async def sync_diagram_state_impl() -> str:
     """
     同步 Agent 和 Browser 的圖表狀態
     """
-    from .web_client import web_client
+    from ..web_client import web_client
     
     try:
-        response = await web_client.send_command({
-            "action": "sync_state",
-        })
+        # 先取得當前圖表內容
+        content = await web_client.get_diagram_content()
         
-        if not response.get("success"):
-            return "同步失敗"
+        if "error" in content:
+            return f"無法取得圖表內容: {content['error']}"
         
-        state = response.get("state", {})
+        xml = content.get("xml", "")
+        
+        # 設定為新基準
+        response = await web_client.sync_diff_state(xml)
+        
+        if "error" in response:
+            return f"同步失敗: {response['error']}"
         
         return f"""## 圖表狀態已同步
 
-- 節點數量: {state.get('node_count', 0)}
-- 連線數量: {state.get('edge_count', 0)}
-- 最後更新: {state.get('timestamp', 'unknown')}
-
-現在的狀態已設為新的基準點，之後的變更追蹤會從這裡開始。"""
+目前的狀態已設為新的基準點，之後的變更追蹤會從這裡開始。
+分頁 ID: {content.get('tabId', 'unknown')}
+分頁名稱: {content.get('tabName', 'unknown')}"""
 
     except Exception as e:
         return f"同步時發生錯誤: {str(e)}"
@@ -271,18 +285,22 @@ async def get_diagram_elements_impl(
     
     用途: 在執行操作前，了解目前有哪些元素及其 ID
     """
-    from .web_client import web_client
+    from ..web_client import web_client
     
     try:
-        response = await web_client.send_command({
-            "action": "get_elements",
-            "element_type": element_type,  # "nodes", "edges", or None for all
-        })
+        # 取得圖表內容
+        content = await web_client.get_diagram_content()
         
-        if not response.get("success"):
-            return "無法取得元素列表"
+        if "error" in content:
+            return f"無法取得圖表: {content['error']}"
         
-        elements = response.get("elements", [])
+        xml = content.get("xml", "")
+        
+        if not xml:
+            return "圖表中沒有內容。"
+        
+        # 解析 XML 取得元素
+        elements = _parse_elements_from_xml(xml, element_type)
         
         if not elements:
             return "圖表中沒有元素。"
@@ -305,15 +323,78 @@ async def get_diagram_elements_impl(
             result_parts.append("")
             result_parts.append("### 連線:")
             for edge in edges:
+                edge_label = f' "{edge["value"]}"' if edge.get('value') else ''
                 result_parts.append(
-                    f"- id=\"{edge['id']}\": {edge.get('source', '?')} → {edge.get('target', '?')}"
-                    f"{' \"' + edge['value'] + '\"' if edge.get('value') else ''}"
+                    f"- id=\"{edge['id']}\": {edge.get('source', '?')} → {edge.get('target', '?')}{edge_label}"
                 )
         
         return "\n".join(result_parts)
         
     except Exception as e:
         return f"取得元素時發生錯誤: {str(e)}"
+
+
+def _parse_elements_from_xml(xml: str, element_type: Optional[str] = None) -> List[Dict]:
+    """從 XML 解析元素列表"""
+    import re
+    
+    elements = []
+    
+    # 匹配 mxCell 元素
+    cell_pattern = r'<mxCell\s+([^>]*)/?>(?:<mxGeometry\s+([^>]*)/>)?'
+    
+    for match in re.finditer(cell_pattern, xml, re.DOTALL):
+        attrs_str = match.group(1)
+        geo_str = match.group(2) or ""
+        
+        # 解析屬性
+        attrs = {}
+        for attr_match in re.finditer(r'(\w+)="([^"]*)"', attrs_str):
+            attrs[attr_match.group(1)] = attr_match.group(2)
+        
+        cell_id = attrs.get("id", "")
+        
+        # 跳過根元素
+        if cell_id in ["0", "1"]:
+            continue
+        
+        # 判斷是節點還是連線
+        is_edge = attrs.get("edge") == "1"
+        is_vertex = attrs.get("vertex") == "1"
+        
+        # 根據過濾條件
+        if element_type == "nodes" and is_edge:
+            continue
+        if element_type == "edges" and is_vertex:
+            continue
+        
+        element = {
+            "id": cell_id,
+            "value": attrs.get("value", ""),
+            "type": "edge" if is_edge else "node",
+        }
+        
+        if is_edge:
+            element["source"] = attrs.get("source", "")
+            element["target"] = attrs.get("target", "")
+        else:
+            # 解析 geometry
+            geo_attrs = {}
+            for attr_match in re.finditer(r'(\w+)="([^"]*)"', geo_str):
+                geo_attrs[attr_match.group(1)] = attr_match.group(2)
+            
+            element["position"] = {
+                "x": float(geo_attrs.get("x", 0)),
+                "y": float(geo_attrs.get("y", 0)),
+            }
+            element["size"] = {
+                "width": float(geo_attrs.get("width", 0)),
+                "height": float(geo_attrs.get("height", 0)),
+            }
+        
+        elements.append(element)
+    
+    return elements
 
 
 # === 工具註冊 ===

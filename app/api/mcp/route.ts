@@ -30,6 +30,31 @@ let pendingUpdates: {
 // 用戶事件隊列（讓 Agent 可以查詢）
 let userEvents: UserEvent[] = [];
 
+// === Diff 相關狀態 ===
+// 儲存基準 XML（用於計算 diff）
+let baseXmlState: { [tabId: string]: string } = {};
+// 儲存用戶變更摘要（由瀏覽器定期回報）
+let humanChanges: {
+  hasChanges: boolean;
+  operations: {
+    added: { id: string; type: string; value: string }[];
+    modified: { id: string; field: string; before: any; after: any }[];
+    deleted: { id: string; type: string; value?: string }[];
+  };
+  summary: string;
+  timestamp: number;
+} | null = null;
+
+// 待應用的操作（MCP 發送，瀏覽器執行）
+let pendingOperations: {
+  operations: any[];
+  preserveUserChanges: boolean;
+  requestId: string;
+  timestamp: number;
+  result?: any;
+  resolved: boolean;
+}[] = [];
+
 function generateTabId(): string {
   return `tab-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 }
@@ -173,6 +198,58 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       success: true,
       remaining: userEvents.length,
+    });
+  }
+
+  // === Diff 相關 GET 處理 ===
+  
+  if (action === 'get_changes') {
+    // 取得用戶變更摘要（給 MCP 用）
+    if (!humanChanges) {
+      return NextResponse.json({
+        success: true,
+        changes: {
+          hasChanges: false,
+          operations: { added: [], modified: [], deleted: [] },
+          summary: 'No changes tracked yet',
+        }
+      });
+    }
+    return NextResponse.json({
+      success: true,
+      changes: humanChanges,
+    });
+  }
+  
+  if (action === 'check_pending_ops') {
+    // 瀏覽器檢查是否有待執行的操作
+    const pendingOp = pendingOperations.find(op => !op.resolved);
+    if (pendingOp) {
+      return NextResponse.json({
+        hasPending: true,
+        requestId: pendingOp.requestId,
+        operations: pendingOp.operations,
+        preserveUserChanges: pendingOp.preserveUserChanges,
+      });
+    }
+    return NextResponse.json({ hasPending: false });
+  }
+  
+  if (action === 'get_apply_result') {
+    // MCP 取得操作執行結果
+    const requestId = searchParams.get('requestId');
+    const op = pendingOperations.find(o => o.requestId === requestId);
+    if (!op) {
+      return NextResponse.json({ error: 'No matching operation' }, { status: 404 });
+    }
+    if (!op.resolved) {
+      return NextResponse.json({ pending: true });
+    }
+    // 清除已完成的操作
+    pendingOperations = pendingOperations.filter(o => o.requestId !== requestId);
+    return NextResponse.json({
+      success: true,
+      result: op.result,
     });
   }
 
@@ -373,6 +450,92 @@ export async function POST(req: NextRequest) {
       const { message, ...rest } = body;
       console.log(`[BROWSER DEBUG] ${message}`, JSON.stringify(rest, null, 2));
       return NextResponse.json({ success: true });
+    }
+
+    // === Diff 相關 POST 處理 ===
+    
+    if (action === 'report_changes') {
+      // 瀏覽器回報用戶變更（定期或 export 時）
+      const { changes } = body;
+      humanChanges = {
+        ...changes,
+        timestamp: Date.now(),
+      };
+      return NextResponse.json({ success: true, message: 'Changes reported' });
+    }
+    
+    if (action === 'apply_operations') {
+      // MCP 請求應用增量操作到圖表
+      const { operations, preserveUserChanges = true, requestId } = body;
+      
+      pendingOperations.push({
+        operations,
+        preserveUserChanges,
+        requestId: requestId || `op-${Date.now()}`,
+        timestamp: Date.now(),
+        resolved: false,
+      });
+      
+      return NextResponse.json({
+        success: true,
+        requestId: requestId || `op-${Date.now()}`,
+        message: 'Operations queued for browser execution',
+      });
+    }
+    
+    if (action === 'operation_result') {
+      // 瀏覽器回報操作執行結果
+      const { requestId, result, newXml } = body;
+      
+      const op = pendingOperations.find(o => o.requestId === requestId);
+      if (op) {
+        op.resolved = true;
+        op.result = result;
+        
+        // 更新 tab XML
+        if (newXml && activeTabId) {
+          const tab = tabs.find(t => t.id === activeTabId);
+          if (tab) {
+            tab.xml = newXml;
+          }
+        }
+        
+        return NextResponse.json({ success: true, message: 'Result recorded' });
+      }
+      return NextResponse.json({ error: 'No matching operation' }, { status: 404 });
+    }
+    
+    if (action === 'set_base_xml') {
+      // 設定基準 XML（用於追蹤 diff）
+      const targetTabId = tabId || activeTabId;
+      if (targetTabId && xml) {
+        baseXmlState[targetTabId] = xml;
+        // 清除舊的變更記錄
+        humanChanges = null;
+        return NextResponse.json({ 
+          success: true, 
+          message: 'Base XML set',
+          tabId: targetTabId 
+        });
+      }
+      return NextResponse.json({ error: 'No tab or xml specified' }, { status: 400 });
+    }
+    
+    if (action === 'sync_diff_state') {
+      // 同步 diff 狀態（清除變更並設定新基準）
+      const targetTabId = tabId || activeTabId;
+      if (targetTabId && xml) {
+        baseXmlState[targetTabId] = xml;
+        humanChanges = null;
+        // 清除已完成的操作
+        pendingOperations = pendingOperations.filter(o => !o.resolved);
+        return NextResponse.json({ 
+          success: true, 
+          message: 'Diff state synced',
+          tabId: targetTabId 
+        });
+      }
+      return NextResponse.json({ error: 'No tab or xml specified' }, { status: 400 });
     }
 
     return NextResponse.json({ error: 'Unknown action' }, { status: 400 });

@@ -320,6 +320,148 @@ class WebClient:
                 return {"error": f"HTTP {response.status_code}"}
         except Exception as e:
             return {"error": str(e)}
+    
+    # === Diff 相關方法 ===
+    
+    async def get_diagram_changes(self) -> dict:
+        """
+        取得用戶對圖表的變更摘要
+        
+        Returns:
+            包含 changes 的 dict，結構如下：
+            {
+                "hasChanges": bool,
+                "operations": {
+                    "added": [...],
+                    "modified": [...],
+                    "deleted": [...]
+                },
+                "summary": str
+            }
+        """
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                url = f"{config.api_mcp_url}?action=get_changes"
+                response = await client.get(url)
+                if response.status_code == 200:
+                    return response.json()
+                return {"error": f"HTTP {response.status_code}"}
+        except Exception as e:
+            return {"error": str(e)}
+    
+    async def apply_diagram_operations(
+        self, 
+        operations: list,
+        preserve_user_changes: bool = True,
+        request_id: Optional[str] = None
+    ) -> dict:
+        """
+        應用增量操作到圖表
+        
+        Args:
+            operations: 操作列表，每個操作格式如下：
+                - add_node: {"op": "add_node", "id": str, "value": str, "style": str, "x": int, "y": int, ...}
+                - modify_node: {"op": "modify_node", "id": str, "changes": {"value": str, "style": str, ...}}
+                - delete_node: {"op": "delete_node", "id": str}
+                - add_edge: {"op": "add_edge", "id": str, "source": str, "target": str, ...}
+                - modify_edge: {"op": "modify_edge", "id": str, "changes": {...}}
+                - delete_edge: {"op": "delete_edge", "id": str}
+            preserve_user_changes: 是否保留用戶的變更（遇到衝突時跳過）
+            request_id: 請求 ID，用於追蹤異步結果
+            
+        Returns:
+            包含 requestId 的 dict，用於後續查詢結果
+        """
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                payload = {
+                    "action": "apply_operations",
+                    "operations": operations,
+                    "preserveUserChanges": preserve_user_changes,
+                }
+                if request_id:
+                    payload["requestId"] = request_id
+                    
+                response = await client.post(config.api_mcp_url, json=payload)
+                if response.status_code == 200:
+                    return response.json()
+                return {"error": f"HTTP {response.status_code}"}
+        except Exception as e:
+            return {"error": str(e)}
+    
+    async def get_apply_result(self, request_id: str) -> dict:
+        """
+        取得操作執行結果
+        
+        Args:
+            request_id: 請求 ID
+            
+        Returns:
+            執行結果或 pending 狀態
+        """
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                url = f"{config.api_mcp_url}?action=get_apply_result&requestId={request_id}"
+                response = await client.get(url)
+                if response.status_code == 200:
+                    return response.json()
+                return {"error": f"HTTP {response.status_code}"}
+        except Exception as e:
+            return {"error": str(e)}
+    
+    async def set_base_xml(self, xml: str, tab_id: Optional[str] = None) -> dict:
+        """
+        設定基準 XML（用於追蹤 diff）
+        
+        Args:
+            xml: 基準 XML
+            tab_id: 分頁 ID
+            
+        Returns:
+            操作結果
+        """
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                payload = {
+                    "action": "set_base_xml",
+                    "xml": xml,
+                }
+                if tab_id:
+                    payload["tabId"] = tab_id
+                    
+                response = await client.post(config.api_mcp_url, json=payload)
+                if response.status_code == 200:
+                    return response.json()
+                return {"error": f"HTTP {response.status_code}"}
+        except Exception as e:
+            return {"error": str(e)}
+    
+    async def sync_diff_state(self, xml: str, tab_id: Optional[str] = None) -> dict:
+        """
+        同步 diff 狀態（清除變更並設定新基準）
+        
+        Args:
+            xml: 新的基準 XML
+            tab_id: 分頁 ID
+            
+        Returns:
+            操作結果
+        """
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                payload = {
+                    "action": "sync_diff_state",
+                    "xml": xml,
+                }
+                if tab_id:
+                    payload["tabId"] = tab_id
+                    
+                response = await client.post(config.api_mcp_url, json=payload)
+                if response.status_code == 200:
+                    return response.json()
+                return {"error": f"HTTP {response.status_code}"}
+        except Exception as e:
+            return {"error": str(e)}
 
 
 # 全局客戶端實例

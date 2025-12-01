@@ -1,8 +1,10 @@
 "use client";
 
-import React, { createContext, useContext, useRef, useState } from "react";
+import React, { createContext, useContext, useRef, useState, useCallback, useEffect } from "react";
 import type { DrawIoEmbedRef } from "react-drawio";
 import { extractDiagramXML } from "../lib/utils";
+import { DiagramDiffTracker } from "../lib/diagram-diff-tracker";
+import { DiagramOperationsHandler, DiagramOperation, ApplyResult } from "../lib/diagram-operations-handler";
 
 interface DiagramContextType {
     chartXML: string;
@@ -14,6 +16,12 @@ interface DiagramContextType {
     drawioRef: React.Ref<DrawIoEmbedRef | null>;
     handleDiagramExport: (data: any) => void;
     clearDiagram: () => void;
+    // 新增: Diff 相關功能
+    getHumanChanges: () => ReturnType<DiagramOperationsHandler['getHumanChanges']>;
+    applyOperations: (ops: DiagramOperation[], preserveUserChanges?: boolean) => ApplyResult;
+    getElements: (type?: 'nodes' | 'edges') => ReturnType<DiagramOperationsHandler['getElements']>;
+    syncState: () => ReturnType<DiagramOperationsHandler['syncState']>;
+    setBaseState: () => void;
 }
 
 const DiagramContext = createContext<DiagramContextType | undefined>(undefined);
@@ -26,6 +34,9 @@ export function DiagramProvider({ children }: { children: React.ReactNode }) {
     >([]);
     const drawioRef = useRef<DrawIoEmbedRef | null>(null);
     const resolverRef = useRef<((value: string) => void) | null>(null);
+    
+    // Diff 追蹤相關
+    const opsHandlerRef = useRef<DiagramOperationsHandler>(new DiagramOperationsHandler());
 
     const handleExport = () => {
         if (drawioRef.current) {
@@ -76,6 +87,9 @@ export function DiagramProvider({ children }: { children: React.ReactNode }) {
                         xml: extractedXML,
                     },
                 ]);
+                // 更新 diff tracker
+                opsHandlerRef.current.updateXml(extractedXML);
+                
                 if (resolverRef.current) {
                     resolverRef.current(extractedXML);
                     resolverRef.current = null;
@@ -105,7 +119,109 @@ export function DiagramProvider({ children }: { children: React.ReactNode }) {
         setChartXML(emptyDiagram);
         setLatestSvg("");
         setDiagramHistory([]);
+        opsHandlerRef.current.setCurrentXml(emptyDiagram);
     };
+
+    // === Diff 相關函數 ===
+    
+    // 取得用戶變更
+    const getHumanChanges = useCallback(() => {
+        return opsHandlerRef.current.getHumanChanges();
+    }, []);
+    
+    // 應用操作
+    const applyOperations = useCallback((ops: DiagramOperation[], preserveUserChanges: boolean = true) => {
+        const result = opsHandlerRef.current.applyOperations(ops, preserveUserChanges);
+        if (result.success && result.newXml) {
+            // 載入新的 XML 到 Draw.io
+            loadDiagram(result.newXml);
+            setChartXML(result.newXml);
+        }
+        return result;
+    }, []);
+    
+    // 取得元素列表
+    const getElements = useCallback((type?: 'nodes' | 'edges') => {
+        return opsHandlerRef.current.getElements(type);
+    }, []);
+    
+    // 同步狀態
+    const syncState = useCallback(() => {
+        return opsHandlerRef.current.syncState();
+    }, []);
+    
+    // 設定基準狀態（Agent 完成操作後呼叫）
+    const setBaseState = useCallback(() => {
+        opsHandlerRef.current.setCurrentXml(chartXML);
+    }, [chartXML]);
+
+    // === 輪詢處理 ===
+    
+    // 檢查並執行待處理操作
+    const checkAndApplyPendingOperations = useCallback(async () => {
+        try {
+            const response = await fetch('/api/mcp?action=check_pending_ops');
+            const data = await response.json();
+            
+            if (data.hasPending && data.operations) {
+                console.log('[DiagramContext] Applying pending operations:', data.operations);
+                
+                const result = applyOperations(data.operations, data.preserveUserChanges ?? true);
+                
+                // 回報結果
+                await fetch('/api/mcp', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        action: 'operation_result',
+                        requestId: data.requestId,
+                        result: {
+                            success: result.success,
+                            applied: result.applied,
+                            conflicts: result.conflicts,
+                        },
+                        newXml: result.newXml,
+                    }),
+                });
+            }
+        } catch (error) {
+            console.error('[DiagramContext] Error checking pending operations:', error);
+        }
+    }, [applyOperations]);
+    
+    // 回報用戶變更
+    const reportChangesToServer = useCallback(async () => {
+        if (!chartXML) return;
+        
+        try {
+            const changes = getHumanChanges();
+            
+            await fetch('/api/mcp', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: 'report_changes',
+                    changes: changes,
+                }),
+            });
+        } catch (error) {
+            console.error('[DiagramContext] Error reporting changes:', error);
+        }
+    }, [chartXML, getHumanChanges]);
+    
+    // 設定輪詢 interval
+    useEffect(() => {
+        // 每 2 秒檢查一次待處理操作
+        const opsInterval = setInterval(checkAndApplyPendingOperations, 2000);
+        
+        // 每 3 秒回報一次變更
+        const changesInterval = setInterval(reportChangesToServer, 3000);
+        
+        return () => {
+            clearInterval(opsInterval);
+            clearInterval(changesInterval);
+        };
+    }, [checkAndApplyPendingOperations, reportChangesToServer]);
 
     return (
         <DiagramContext.Provider
@@ -119,6 +235,12 @@ export function DiagramProvider({ children }: { children: React.ReactNode }) {
                 drawioRef,
                 handleDiagramExport,
                 clearDiagram,
+                // Diff 相關
+                getHumanChanges,
+                applyOperations,
+                getElements,
+                syncState,
+                setBaseState,
             }}
         >
             {children}
