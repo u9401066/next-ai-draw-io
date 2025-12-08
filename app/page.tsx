@@ -4,6 +4,8 @@ import { DrawIoEmbed, EventSave } from "react-drawio";
 import ChatPanel from "@/components/chat-panel";
 import { useDiagram } from "@/contexts/diagram-context";
 import { useMCPPolling } from "@/lib/use-mcp-polling";
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
+import { cn } from "@/lib/utils";
 
 export default function Home() {
     const { drawioRef, handleDiagramExport, loadDiagram } = useDiagram();
@@ -19,7 +21,7 @@ export default function Home() {
     // Track last save time to prevent duplicate downloads
     const lastSaveRef = React.useRef<number>(0);
     const SAVE_DEBOUNCE_MS = 2000; // Minimum 2 seconds between saves
-    
+
     // Handle user save event (Ctrl+S or menu save)
     // This will: 1) Download the file locally, 2) Report event to MCP for Agent
     const handleSave = useCallback(async (data: EventSave) => {
@@ -29,7 +31,7 @@ export default function Home() {
             xmlLength: data.xml?.length,
             xmlPrefix: data.xml?.substring?.(0, 100),
         });
-        
+
         // 1. 觸發檔案下載（真正存檔）- 防止短時間內重複下載
         if (now - lastSaveRef.current > SAVE_DEBOUNCE_MS) {
             lastSaveRef.current = now;
@@ -53,7 +55,7 @@ export default function Home() {
         } else {
             console.log('[Draw.io] Save debounced (too frequent)');
         }
-        
+
         // 2. 記錄事件到 MCP（讓 Agent 可以查詢）- 每次都記錄
         try {
             await fetch('/api/mcp', {
@@ -112,38 +114,59 @@ export default function Home() {
     }, []);
 
     return (
-        <div className="flex h-screen bg-gray-100 relative">
+        <div className="flex h-screen bg-gray-100 relative overflow-hidden">
             {/* Mobile warning overlay - keeps components mounted */}
             {isMobile && (
                 <div className="absolute inset-0 z-50 flex items-center justify-center bg-gray-100">
                     <div className="text-center p-8">
                         <h1 className="text-2xl font-semibold text-gray-800">
-                            Please open this application on a desktop or laptop
+                            請在桌機或筆記型電腦上開啟此應用程式
                         </h1>
                     </div>
                 </div>
             )}
 
-            <div className={`${isChatVisible ? 'w-2/3' : 'w-full'} p-1 h-full relative transition-all duration-300 ease-in-out`}>
-                <DrawIoEmbed
-                    ref={drawioRef}
-                    onExport={handleDiagramExport}
-                    onLoad={handleDrawioLoad}
-                    onSave={handleSave}
-                    urlParameters={{
-                        spin: true,
-                        libraries: false,
-                        saveAndExit: false,
-                        noExitBtn: true,
-                    }}
-                />
-            </div>
-            <div className={`${isChatVisible ? 'w-1/3' : 'w-12'} h-full p-1 transition-all duration-300 ease-in-out`}>
-                <ChatPanel
-                    isVisible={isChatVisible}
-                    onToggleVisibility={() => setIsChatVisible(!isChatVisible)}
-                />
-            </div>
+            <ResizablePanelGroup direction="horizontal">
+                <ResizablePanel defaultSize={70} minSize={30}>
+                    <div className="h-full w-full p-1 relative">
+                        <DrawIoEmbed
+                            ref={drawioRef}
+                            onExport={handleDiagramExport}
+                            onLoad={handleDrawioLoad}
+                            onSave={handleSave}
+                            urlParameters={{
+                                spin: true,
+                                libraries: false,
+                                saveAndExit: false,
+                                noExitBtn: true,
+                            }}
+                        />
+                    </div>
+                </ResizablePanel>
+
+                <ResizableHandle withHandle />
+
+                <ResizablePanel
+                    defaultSize={30}
+                    minSize={20}
+                    maxSize={50}
+                    collapsible={true}
+                    collapsedSize={0}
+                    onCollapse={() => setIsChatVisible(false)}
+                    onExpand={() => setIsChatVisible(true)}
+                    className={cn(
+                        "transition-all duration-300 ease-in-out",
+                        !isChatVisible && "min-w-[50px]"
+                    )}
+                >
+                    <div className="h-full p-1">
+                        <ChatPanel
+                            isVisible={true} // Always visible content, panel logic handles collapse
+                            onToggleVisibility={() => setIsChatVisible(!isChatVisible)}
+                        />
+                    </div>
+                </ResizablePanel>
+            </ResizablePanelGroup>
         </div>
     );
 }

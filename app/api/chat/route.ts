@@ -6,11 +6,12 @@ export const maxDuration = 300;
 
 export async function POST(req: Request) {
   try {
-    const { messages, xml } = await req.json();
+    const { messages, xml, sessionId, provider, modelId } = await req.json();
 
     const systemMessage = `
 You are an expert diagram creation assistant specializing in draw.io XML generation.
 Your primary function is crafting clear, well-organized visual diagrams through precise XML specifications.
+Please always respond in Traditional Chinese (繁體中文).
 You can see the image that user uploaded.
 Note that when you need to generate diagram about aws architecture, use **AWS 2025 icons**.
 
@@ -90,7 +91,7 @@ ${lastMessageText}
 
     // Convert UIMessages to ModelMessages and add system message
     const modelMessages = convertToModelMessages(messages);
-    
+
     // Log messages with empty content for debugging (helps identify root cause)
     const emptyMessages = modelMessages.filter((msg: any) =>
       !msg.content || !Array.isArray(msg.content) || msg.content.length === 0
@@ -133,8 +134,11 @@ ${lastMessageText}
 
     console.log("Enhanced messages:", enhancedMessages);
 
-    // Get AI model from environment configuration
-    const { model, providerOptions } = getAIModel();
+    // Get AI model from environment configuration or request body override
+    const { model, providerOptions } = getAIModel({
+      provider,
+      model: modelId
+    });
 
     const result = streamText({
       model,

@@ -5,6 +5,7 @@ import { google } from '@ai-sdk/google';
 import { azure } from '@ai-sdk/azure';
 import { ollama } from 'ollama-ai-provider-v2';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
+import { deepseek } from '@ai-sdk/deepseek';
 
 export type ProviderName =
   | 'bedrock'
@@ -13,7 +14,8 @@ export type ProviderName =
   | 'google'
   | 'azure'
   | 'ollama'
-  | 'openrouter';
+  | 'openrouter'
+  | 'deepseek';
 
 interface ModelConfig {
   model: any;
@@ -41,6 +43,7 @@ function validateProviderCredentials(provider: ProviderName): void {
     azure: 'AZURE_API_KEY',
     ollama: null, // No credentials needed for local Ollama
     openrouter: 'OPENROUTER_API_KEY',
+    deepseek: 'DEEPSEEK_API_KEY',
   };
 
   const requiredVar = requiredEnvVars[provider];
@@ -69,9 +72,9 @@ function validateProviderCredentials(provider: ProviderName): void {
  * - OLLAMA_BASE_URL: Ollama server URL (optional, defaults to http://localhost:11434)
  * - OPENROUTER_API_KEY: OpenRouter API key
  */
-export function getAIModel(): ModelConfig {
-  const provider = (process.env.AI_PROVIDER || 'bedrock') as ProviderName;
-  const modelId = process.env.AI_MODEL;
+export function getAIModel(overrides?: { provider?: string, model?: string }): ModelConfig & { headers?: Record<string, string>, modelId: string } {
+  const provider = (overrides?.provider || process.env.AI_PROVIDER || 'bedrock') as ProviderName;
+  const modelId = overrides?.model || process.env.AI_MODEL;
 
   if (!modelId) {
     throw new Error(
@@ -127,6 +130,12 @@ export function getAIModel(): ModelConfig {
       model = ollama(modelId);
       break;
 
+      break;
+
+    case 'deepseek':
+      model = deepseek(modelId);
+      break;
+
     case 'openrouter':
       const openrouter = createOpenRouter({
         apiKey: process.env.OPENROUTER_API_KEY,
@@ -145,5 +154,5 @@ export function getAIModel(): ModelConfig {
     console.log('[AI Provider] Applying provider-specific options');
   }
 
-  return { model, providerOptions };
+  return { model, providerOptions, modelId };
 }

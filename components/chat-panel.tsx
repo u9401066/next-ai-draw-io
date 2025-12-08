@@ -20,6 +20,7 @@ import { ChatMessageDisplay } from "./chat-message-display";
 import { useDiagram } from "@/contexts/diagram-context";
 import { replaceNodes, formatXML } from "@/lib/utils";
 import { ButtonWithTooltip } from "@/components/button-with-tooltip";
+import { SettingsDialog } from "@/components/settings-dialog";
 
 interface ChatPanelProps {
     isVisible: boolean;
@@ -65,6 +66,14 @@ export default function ChatPanel({ isVisible, onToggleVisibility }: ChatPanelPr
     // Add state for input management
     const [input, setInput] = useState("");
 
+    // Add state for chat settings
+    const [chatSettings, setChatSettings] = useState<import("@/components/settings-dialog").ChatSettings>({
+        provider: 'bedrock',
+        model: 'global.anthropic.claude-sonnet-4-5-20250929-v1:0',
+        checkAccessCode: false,
+        accessCode: ''
+    });
+
     // Remove the currentXmlRef and related useEffect
     const { messages, sendMessage, addToolResult, status, error, setMessages } =
         useChat({
@@ -77,7 +86,7 @@ export default function ChatPanel({ isVisible, onToggleVisibility }: ChatPanelPr
                     addToolResult({
                         tool: "display_diagram",
                         toolCallId: toolCall.toolCallId,
-                        output: "Successfully displayed the diagram.",
+                        output: "成功顯示圖表。",
                     });
                 } else if (toolCall.toolName === "edit_diagram") {
                     const { edits } = toolCall.input as {
@@ -99,7 +108,7 @@ export default function ChatPanel({ isVisible, onToggleVisibility }: ChatPanelPr
                         addToolResult({
                             tool: "edit_diagram",
                             toolCallId: toolCall.toolCallId,
-                            output: `Successfully applied ${edits.length} edit(s) to the diagram.`,
+                            output: `成功將 ${edits.length} 個更改應用於圖表。`,
                         });
                     } catch (error) {
                         console.error("Edit diagram failed:", error);
@@ -139,6 +148,29 @@ Please retry with an adjusted search pattern or use display_diagram if retries a
         console.log('[ChatPanel] Status changed to:', status);
     }, [status]);
 
+    // 同步 chatSettings 到 MCP（讓 Agent 可以查詢）
+    useEffect(() => {
+        const syncSettings = async () => {
+            try {
+                await fetch('/api/mcp', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        action: 'sync_settings',
+                        settings: {
+                            checkAccessCode: chatSettings.checkAccessCode,
+                            // 可以在這裡添加其他非 LLM 相關的設定
+                        }
+                    }),
+                });
+                console.log('[ChatPanel] Settings synced to MCP');
+            } catch (error) {
+                console.debug('[ChatPanel] Failed to sync settings:', error);
+            }
+        };
+        syncSettings();
+    }, [chatSettings.checkAccessCode]); // 只在相關設定變更時同步
+
     const onFormSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault();
         const isProcessing = status === "streaming" || status === "submitted";
@@ -176,6 +208,9 @@ Please retry with an adjusted search pattern or use display_diagram if retries a
                     {
                         body: {
                             xml: chartXml,
+                            provider: chatSettings.provider,
+                            modelId: chatSettings.model,
+                            accessCode: chatSettings.checkAccessCode ? chatSettings.accessCode : undefined
                         },
                     }
                 );
@@ -206,7 +241,7 @@ Please retry with an adjusted search pattern or use display_diagram if retries a
         return (
             <Card className="h-full flex flex-col rounded-none py-0 gap-0 items-center justify-start pt-4">
                 <ButtonWithTooltip
-                    tooltipContent="Show chat panel (Ctrl+B)"
+                    tooltipContent="顯示聊天面板 (Ctrl+B)"
                     variant="ghost"
                     size="icon"
                     onClick={onToggleVisibility}
@@ -217,7 +252,7 @@ Please retry with an adjusted search pattern or use display_diagram if retries a
                     className="text-sm text-gray-500 mt-8"
                     style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
                 >
-                    Chat
+                    聊天
                 </div>
             </Card>
         );
@@ -230,12 +265,16 @@ Please retry with an adjusted search pattern or use display_diagram if retries a
                 <div className="flex items-center gap-3">
                     <CardTitle>Next-AI-Drawio</CardTitle>
                     <Link href="/about" className="text-sm text-gray-600 hover:text-gray-900 transition-colors">
-                        About
+                        關於
                     </Link>
                 </div>
                 <div className="flex items-center gap-2">
+                    <SettingsDialog
+                        settings={chatSettings}
+                        onSettingsChange={setChatSettings}
+                    />
                     <ButtonWithTooltip
-                        tooltipContent="Hide chat panel (Ctrl+B)"
+                        tooltipContent="隱藏聊天面板 (Ctrl+B)"
                         variant="ghost"
                         size="icon"
                         onClick={onToggleVisibility}

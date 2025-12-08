@@ -7,6 +7,8 @@ import ExamplePanel from "./chat-example-panel";
 import { UIMessage } from "ai";
 import { convertToLegalXml, replaceNodes } from "@/lib/utils";
 import { Copy, Check, X } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import { useDiagram } from "@/contexts/diagram-context";
 
@@ -135,13 +137,13 @@ export function ChatMessageDisplay({
             >
                 <div className="flex flex-col gap-2">
                     <div className="flex items-center justify-between">
-                        <div className="text-xs">Tool: {toolName}</div>
+                        <div className="text-xs">工具: {toolName}</div>
                         {input && Object.keys(input).length > 0 && (
                             <button
                                 onClick={toggleExpanded}
                                 className="text-xs text-gray-500 hover:text-gray-700"
                             >
-                                {isExpanded ? "Hide Args" : "Show Args"}
+                                {isExpanded ? "隱藏參數" : "顯示參數"}
                             </button>
                         )}
                     </div>
@@ -149,7 +151,7 @@ export function ChatMessageDisplay({
                         <div className="mt-1 font-mono text-xs overflow-hidden">
                             {typeof input === "object" &&
                                 Object.keys(input).length > 0 &&
-                                `Input: ${JSON.stringify(input, null, 2)}`}
+                                `輸入: ${JSON.stringify(input, null, 2)}`}
                         </div>
                     )}
                     <div className="mt-2 text-sm">
@@ -158,18 +160,18 @@ export function ChatMessageDisplay({
                         ) : state === "output-available" ? (
                             <div className="text-green-600">
                                 {output || (toolName === "display_diagram"
-                                    ? "Diagram generated"
+                                    ? "圖表已生成"
                                     : toolName === "edit_diagram"
-                                    ? "Diagram edited"
-                                    : "Tool executed")}
+                                        ? "圖表已編輯"
+                                        : "工具已執行")}
                             </div>
                         ) : state === "output-error" ? (
                             <div className="text-red-600">
                                 {output || (toolName === "display_diagram"
-                                    ? "Error generating diagram"
+                                    ? "生成圖表時發生錯誤"
                                     : toolName === "edit_diagram"
-                                    ? "Error editing diagram"
-                                    : "Tool error")}
+                                        ? "編輯圖表時發生錯誤"
+                                        : "工具執行錯誤")}
                             </div>
                         ) : null}
                     </div>
@@ -187,67 +189,65 @@ export function ChatMessageDisplay({
                     const messageText = getMessageTextContent(message);
                     const isCopied = copiedMessageId === message.id;
                     const isCopyFailed = copyFailedMessageId === message.id;
-                    
+
                     return (
-                    <div
-                        key={message.id}
-                        className={`mb-4 group ${
-                            message.role === "user" ? "text-right" : "text-left"
-                        }`}
-                    >
                         <div
-                            className={`relative inline-block px-4 py-2 whitespace-pre-wrap text-sm rounded-lg max-w-[85%] break-words ${
-                                message.role === "user"
+                            key={message.id}
+                            className={`mb-4 group ${message.role === "user" ? "text-right" : "text-left"
+                                }`}
+                        >
+                            <div
+                                className={`relative inline-block px-4 py-2 whitespace-pre-wrap text-sm rounded-lg max-w-[85%] break-words ${message.role === "user"
                                     ? "bg-primary text-primary-foreground"
                                     : "bg-muted text-muted-foreground"
-                            }`}
-                        >
-                            {/* Copy button for user messages */}
-                            {message.role === "user" && messageText && (
-                                <button
-                                    onClick={() => copyMessageToClipboard(message.id, messageText)}
-                                    className="absolute -left-8 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-gray-200 opacity-0 group-hover:opacity-100 transition-opacity"
-                                    title="Copy message"
-                                >
-                                    {isCopied ? (
-                                        <Check className="w-4 h-4 text-green-600" />
-                                    ) : isCopyFailed ? (
-                                        <X className="w-4 h-4 text-red-600" />
-                                    ) : (
-                                        <Copy className="w-4 h-4 text-gray-500" />
-                                    )}
-                                </button>
-                            )}
-                            {message.parts?.map((part: any, index: number) => {
-                                switch (part.type) {
-                                    case "text":
-                                        return (
-                                            <div key={index}>{part.text}</div>
-                                        );
-                                    case "file":
-                                        return (
-                                            <div key={index} className="mt-2">
-                                                <Image
-                                                    src={part.url}
-                                                    width={200}
-                                                    height={200}
-                                                    alt={`Uploaded diagram or image for AI analysis`}
-                                                    className="rounded-md border"
-                                                    style={{
-                                                        objectFit: "contain",
-                                                    }}
-                                                />
-                                            </div>
-                                        );
-                                    default:
-                                        if (part.type?.startsWith("tool-")) {
-                                            return renderToolPart(part);
-                                        }
-                                        return null;
-                                }
-                            })}
+                                    }`}
+                            >
+                                {/* Copy button for user messages */}
+                                {message.role === "user" && messageText && (
+                                    <button
+                                        onClick={() => copyMessageToClipboard(message.id, messageText)}
+                                        className="absolute -left-8 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-gray-200 opacity-0 group-hover:opacity-100 transition-opacity"
+                                        title="Copy message"
+                                    >
+                                        {isCopied ? (
+                                            <Check className="w-4 h-4 text-green-600" />
+                                        ) : isCopyFailed ? (
+                                            <X className="w-4 h-4 text-red-600" />
+                                        ) : (
+                                            <Copy className="w-4 h-4 text-gray-500" />
+                                        )}
+                                    </button>
+                                )}
+                                {message.parts?.map((part: any, index: number) => {
+                                    switch (part.type) {
+                                        case "text":
+                                            return (
+                                                <div key={index}>{part.text}</div>
+                                            );
+                                        case "file":
+                                            return (
+                                                <div key={index} className="mt-2">
+                                                    <Image
+                                                        src={part.url}
+                                                        width={200}
+                                                        height={200}
+                                                        alt={`Uploaded diagram or image for AI analysis`}
+                                                        className="rounded-md border"
+                                                        style={{
+                                                            objectFit: "contain",
+                                                        }}
+                                                    />
+                                                </div>
+                                            );
+                                        default:
+                                            if (part.type?.startsWith("tool-")) {
+                                                return renderToolPart(part);
+                                            }
+                                            return null;
+                                    }
+                                })}
+                            </div>
                         </div>
-                    </div>
                     );
                 })
             )}

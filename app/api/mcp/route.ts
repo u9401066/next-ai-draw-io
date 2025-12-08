@@ -7,7 +7,7 @@ const USE_WEBSOCKET = process.env.NEXT_PUBLIC_USE_WEBSOCKET !== 'false';
 // 轉發請求到 WebSocket Server
 async function forwardToWsServer(action: string, data?: any): Promise<Response | null> {
   if (!USE_WEBSOCKET) return null;
-  
+
   try {
     if (data) {
       return await fetch(WS_API_URL, {
@@ -43,8 +43,8 @@ interface UserEvent {
 // 儲存所有分頁的圖表狀態（在生產環境中應該用 Redis 或其他持久化方案）
 let tabs: TabState[] = [];
 let activeTabId: string | null = null;
-let pendingUpdates: { 
-  xml: string; 
+let pendingUpdates: {
+  xml: string;
   timestamp: number;
   tabId?: string;
   tabName?: string;
@@ -53,6 +53,14 @@ let pendingUpdates: {
 
 // 用戶事件隊列（讓 Agent 可以查詢）
 let userEvents: UserEvent[] = [];
+
+// 前端設定狀態（讓 Agent 可以查詢）
+let clientSettings: {
+  accessCodeEnabled?: boolean;
+  theme?: string;
+  language?: string;
+  [key: string]: any;
+} = {};
 
 // === Diff 相關狀態 ===
 // 儲存基準 XML（用於計算 diff）
@@ -92,7 +100,7 @@ function getOrCreateTab(tabId?: string, tabName?: string): TabState {
       return existingTab;
     }
   }
-  
+
   // 創建新分頁
   const newTab: TabState = {
     id: tabId || generateTabId(),
@@ -105,8 +113,8 @@ function getOrCreateTab(tabId?: string, tabName?: string): TabState {
 }
 
 // 用於請求瀏覽器 export 最新內容
-let exportRequest: { 
-  requestId: string; 
+let exportRequest: {
+  requestId: string;
   timestamp: number;
   resolved: boolean;
   xml?: string;
@@ -119,11 +127,11 @@ export async function GET(req: NextRequest) {
   if (action === 'get') {
     // 獲取當前活躍分頁的圖表
     const activeTab = tabs.find(t => t.id === activeTabId);
-    return NextResponse.json({ 
+    return NextResponse.json({
       xml: activeTab?.xml || '',
       tabId: activeTabId,
       tabs: tabs.map(t => ({ id: t.id, name: t.name, active: t.id === activeTabId })),
-      timestamp: Date.now() 
+      timestamp: Date.now()
     });
   }
 
@@ -173,11 +181,11 @@ export async function GET(req: NextRequest) {
     // 輪詢等待更新（用於前端即時更新）
     const since = parseInt(searchParams.get('since') || '0');
     const updates = pendingUpdates.filter(u => u.timestamp > since);
-    
+
     if (updates.length > 0) {
       const latestUpdate = updates[updates.length - 1];
-      return NextResponse.json({ 
-        hasUpdate: true, 
+      return NextResponse.json({
+        hasUpdate: true,
         xml: latestUpdate.xml,
         tabId: latestUpdate.tabId,
         tabName: latestUpdate.tabName,
@@ -186,11 +194,11 @@ export async function GET(req: NextRequest) {
         timestamp: latestUpdate.timestamp
       });
     }
-    
-    return NextResponse.json({ 
-      hasUpdate: false, 
+
+    return NextResponse.json({
+      hasUpdate: false,
       tabs: tabs.map(t => ({ id: t.id, name: t.name, active: t.id === activeTabId })),
-      timestamp: Date.now() 
+      timestamp: Date.now()
     });
   }
 
@@ -206,7 +214,7 @@ export async function GET(req: NextRequest) {
     // 獲取用戶事件（讓 Agent 查詢用戶操作）
     const since = parseInt(searchParams.get('since') || '0');
     const events = userEvents.filter(e => e.timestamp > since);
-    
+
     return NextResponse.json({
       events,
       count: events.length,
@@ -218,7 +226,7 @@ export async function GET(req: NextRequest) {
     // 清除已處理的事件
     const before = parseInt(searchParams.get('before') || String(Date.now()));
     userEvents = userEvents.filter(e => e.timestamp > before);
-    
+
     return NextResponse.json({
       success: true,
       remaining: userEvents.length,
@@ -226,7 +234,7 @@ export async function GET(req: NextRequest) {
   }
 
   // === Diff 相關 GET 處理 ===
-  
+
   if (action === 'get_changes') {
     // 取得用戶變更摘要（給 MCP 用）
     if (!humanChanges) {
@@ -244,7 +252,7 @@ export async function GET(req: NextRequest) {
       changes: humanChanges,
     });
   }
-  
+
   if (action === 'check_pending_ops') {
     // 瀏覽器檢查是否有待執行的操作
     const pendingOp = pendingOperations.find(op => !op.resolved);
@@ -258,7 +266,7 @@ export async function GET(req: NextRequest) {
     }
     return NextResponse.json({ hasPending: false });
   }
-  
+
   if (action === 'get_apply_result') {
     // MCP 取得操作執行結果
     const requestId = searchParams.get('requestId');
@@ -277,6 +285,15 @@ export async function GET(req: NextRequest) {
     });
   }
 
+  if (action === 'get_settings') {
+    // 取得前端設定（給 Agent 用）
+    return NextResponse.json({
+      success: true,
+      settings: clientSettings,
+      timestamp: Date.now(),
+    });
+  }
+
   return NextResponse.json({ error: 'Unknown action' }, { status: 400 });
 }
 
@@ -291,28 +308,28 @@ export async function POST(req: NextRequest) {
       if (wsResponse?.ok) {
         console.log('[API] Diagram pushed via WebSocket');
       }
-      
+
       // 同時更新本地狀態（作為 fallback）
       const tab = getOrCreateTab(tabId, tabName);
       tab.xml = xml;
       if (tabName) tab.name = tabName;
-      
+
       const timestamp = Date.now();
-      pendingUpdates.push({ 
-        xml, 
+      pendingUpdates.push({
+        xml,
         timestamp,
         tabId: tab.id,
         tabName: tab.name,
         action: 'display'
       });
-      
+
       // 只保留最近 50 個更新
       if (pendingUpdates.length > 50) {
         pendingUpdates = pendingUpdates.slice(-50);
       }
 
-      return NextResponse.json({ 
-        success: true, 
+      return NextResponse.json({
+        success: true,
         message: 'Diagram displayed',
         tabId: tab.id,
         tabName: tab.name,
@@ -325,33 +342,33 @@ export async function POST(req: NextRequest) {
       // 編輯指定分頁或當前分頁的圖表
       const targetTabId = tabId || activeTabId;
       const tab = tabs.find(t => t.id === targetTabId);
-      
+
       if (!tab) {
         return NextResponse.json({ error: 'No active tab to edit' }, { status: 400 });
       }
-      
+
       let updatedXml = tab.xml;
       if (edits && Array.isArray(edits)) {
         for (const edit of edits) {
           updatedXml = updatedXml.replace(edit.search, edit.replace);
         }
       }
-      
+
       tab.xml = updatedXml;
       const timestamp = Date.now();
-      pendingUpdates.push({ 
-        xml: updatedXml, 
+      pendingUpdates.push({
+        xml: updatedXml,
         timestamp,
         tabId: tab.id,
         tabName: tab.name,
         action: 'edit'
       });
 
-      return NextResponse.json({ 
-        success: true, 
+      return NextResponse.json({
+        success: true,
         message: 'Diagram edited',
         tabId: tab.id,
-        timestamp 
+        timestamp
       });
     }
 
@@ -361,7 +378,7 @@ export async function POST(req: NextRequest) {
       if (!tab) {
         return NextResponse.json({ error: `Tab not found: ${tabId}` }, { status: 404 });
       }
-      
+
       activeTabId = tab.id;
       const timestamp = Date.now();
       pendingUpdates.push({
@@ -371,13 +388,13 @@ export async function POST(req: NextRequest) {
         tabName: tab.name,
         action: 'switch'
       });
-      
-      return NextResponse.json({ 
-        success: true, 
+
+      return NextResponse.json({
+        success: true,
         message: 'Tab switched',
         tabId: tab.id,
         xml: tab.xml,
-        timestamp 
+        timestamp
       });
     }
 
@@ -387,9 +404,9 @@ export async function POST(req: NextRequest) {
       if (tabIndex === -1) {
         return NextResponse.json({ error: `Tab not found: ${tabId}` }, { status: 404 });
       }
-      
+
       tabs.splice(tabIndex, 1);
-      
+
       // 如果關閉的是活躍分頁，切換到另一個
       if (tabId === activeTabId) {
         if (tabs.length > 0) {
@@ -398,9 +415,9 @@ export async function POST(req: NextRequest) {
           activeTabId = null;
         }
       }
-      
-      return NextResponse.json({ 
-        success: true, 
+
+      return NextResponse.json({
+        success: true,
         message: 'Tab closed',
         closedId: tabId,
         activeTabId
@@ -423,7 +440,7 @@ export async function POST(req: NextRequest) {
       const eventType = action === 'user_save' ? 'save' : 'autosave';
       const targetTabId = tabId || activeTabId || 'unknown';
       const targetTabName = tabName || tabs.find(t => t.id === targetTabId)?.name || 'Untitled';
-      
+
       // 更新分頁內容
       if (targetTabId && targetTabId !== 'unknown') {
         const tab = tabs.find(t => t.id === targetTabId);
@@ -431,7 +448,7 @@ export async function POST(req: NextRequest) {
           tab.xml = xml;
         }
       }
-      
+
       // 記錄用戶事件
       const event: UserEvent = {
         type: eventType,
@@ -441,16 +458,16 @@ export async function POST(req: NextRequest) {
         timestamp: Date.now(),
       };
       userEvents.push(event);
-      
+
       // 只保留最近 100 個事件
       if (userEvents.length > 100) {
         userEvents = userEvents.slice(-100);
       }
-      
+
       console.log(`[MCP] User ${eventType} event received for tab: ${targetTabName}`);
-      
-      return NextResponse.json({ 
-        success: true, 
+
+      return NextResponse.json({
+        success: true,
         message: `User ${eventType} event recorded`,
         eventId: event.timestamp,
       });
@@ -462,7 +479,7 @@ export async function POST(req: NextRequest) {
       if (exportRequest && exportRequest.requestId === requestId) {
         exportRequest.resolved = true;
         exportRequest.xml = xml;
-        
+
         // 同時更新 tab 內容
         if (activeTabId) {
           const tab = tabs.find(t => t.id === activeTabId);
@@ -470,7 +487,7 @@ export async function POST(req: NextRequest) {
             tab.xml = xml;
           }
         }
-        
+
         return NextResponse.json({ success: true, message: 'Export result received' });
       }
       return NextResponse.json({ error: 'No matching export request' }, { status: 404 });
@@ -484,7 +501,7 @@ export async function POST(req: NextRequest) {
     }
 
     // === Diff 相關 POST 處理 ===
-    
+
     if (action === 'report_changes') {
       // 瀏覽器回報用戶變更（定期或 export 時）
       const { changes } = body;
@@ -494,19 +511,19 @@ export async function POST(req: NextRequest) {
       };
       return NextResponse.json({ success: true, message: 'Changes reported' });
     }
-    
+
     if (action === 'apply_operations') {
       // MCP 請求應用增量操作到圖表
       const { operations, preserveUserChanges = true, requestId } = body;
       const opRequestId = requestId || `op-${Date.now()}`;
-      
+
       // 嘗試透過 WebSocket 推送
-      const wsResponse = await forwardToWsServer('apply_operations', { 
-        operations, 
+      const wsResponse = await forwardToWsServer('apply_operations', {
+        operations,
         preserveUserChanges,
         requestId: opRequestId,
       });
-      
+
       // 同時更新本地狀態（作為 fallback）
       pendingOperations.push({
         operations,
@@ -515,7 +532,7 @@ export async function POST(req: NextRequest) {
         timestamp: Date.now(),
         resolved: false,
       });
-      
+
       return NextResponse.json({
         success: true,
         requestId: opRequestId,
@@ -523,16 +540,16 @@ export async function POST(req: NextRequest) {
         wsForwarded: wsResponse?.ok ?? false,
       });
     }
-    
+
     if (action === 'operation_result') {
       // 瀏覽器回報操作執行結果
       const { requestId, result, newXml } = body;
-      
+
       const op = pendingOperations.find(o => o.requestId === requestId);
       if (op) {
         op.resolved = true;
         op.result = result;
-        
+
         // 更新 tab XML
         if (newXml && activeTabId) {
           const tab = tabs.find(t => t.id === activeTabId);
@@ -540,12 +557,12 @@ export async function POST(req: NextRequest) {
             tab.xml = newXml;
           }
         }
-        
+
         return NextResponse.json({ success: true, message: 'Result recorded' });
       }
       return NextResponse.json({ error: 'No matching operation' }, { status: 404 });
     }
-    
+
     if (action === 'set_base_xml') {
       // 設定基準 XML（用於追蹤 diff）
       const targetTabId = tabId || activeTabId;
@@ -553,15 +570,15 @@ export async function POST(req: NextRequest) {
         baseXmlState[targetTabId] = xml;
         // 清除舊的變更記錄
         humanChanges = null;
-        return NextResponse.json({ 
-          success: true, 
+        return NextResponse.json({
+          success: true,
           message: 'Base XML set',
-          tabId: targetTabId 
+          tabId: targetTabId
         });
       }
       return NextResponse.json({ error: 'No tab or xml specified' }, { status: 400 });
     }
-    
+
     if (action === 'sync_diff_state') {
       // 同步 diff 狀態（清除變更並設定新基準）
       const targetTabId = tabId || activeTabId;
@@ -570,13 +587,34 @@ export async function POST(req: NextRequest) {
         humanChanges = null;
         // 清除已完成的操作
         pendingOperations = pendingOperations.filter(o => !o.resolved);
-        return NextResponse.json({ 
-          success: true, 
+        return NextResponse.json({
+          success: true,
           message: 'Diff state synced',
-          tabId: targetTabId 
+          tabId: targetTabId
         });
       }
       return NextResponse.json({ error: 'No tab or xml specified' }, { status: 400 });
+    }
+
+    if (action === 'sync_settings') {
+      // 同步前端設定（從 ChatPanel 傳來）
+      const { settings } = body;
+      if (settings) {
+        // 只保留非 LLM 相關的設定
+        clientSettings = {
+          accessCodeEnabled: settings.checkAccessCode,
+          theme: settings.theme,
+          language: settings.language,
+          // 可以在這裡添加其他需要同步的設定
+        };
+        console.log('[MCP] Client settings synced:', clientSettings);
+        return NextResponse.json({
+          success: true,
+          message: 'Settings synced',
+          timestamp: Date.now()
+        });
+      }
+      return NextResponse.json({ error: 'No settings provided' }, { status: 400 });
     }
 
     return NextResponse.json({ error: 'Unknown action' }, { status: 400 });
