@@ -203,8 +203,96 @@ async def save_tab_impl(
         return f"❌ 存檔失敗: {e}"
 
 
+async def create_tab_impl(tab_name: str, template: Optional[str] = None) -> str:
+    """
+    建立新的圖表分頁
+    
+    Args:
+        tab_name: 分頁名稱
+        template: 模板名稱（可選）
+        
+    Returns:
+        建立結果訊息
+    """
+    if not web_client.is_running():
+        return "⚠️ Draw.io Web 未運行。請先使用 start_drawio_web 啟動。"
+    
+    # 根據模板選擇初始 XML
+    templates = {
+        "flowchart": '''<mxfile>
+            <diagram name="{name}" id="new-flowchart">
+                <mxGraphModel>
+                    <root>
+                        <mxCell id="0"/>
+                        <mxCell id="1" parent="0"/>
+                        <mxCell id="start" value="開始" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+                            <mxGeometry x="200" y="40" width="80" height="40" as="geometry"/>
+                        </mxCell>
+                    </root>
+                </mxGraphModel>
+            </diagram>
+        </mxfile>''',
+        "blank": '''<mxfile>
+            <diagram name="{name}" id="new-blank">
+                <mxGraphModel>
+                    <root>
+                        <mxCell id="0"/>
+                        <mxCell id="1" parent="0"/>
+                    </root>
+                </mxGraphModel>
+            </diagram>
+        </mxfile>''',
+    }
+    
+    # 取得模板或使用空白
+    xml_template = templates.get(template or "blank", templates["blank"])
+    xml = xml_template.format(name=tab_name)
+    
+    # 發送到瀏覽器
+    result = await web_client.send(
+        action="display",
+        xml=xml,
+        tab_name=tab_name
+    )
+    
+    if "error" in result:
+        return f"❌ 建立分頁失敗: {result['error']}"
+    
+    tab_id = result.get("tabId", "unknown")
+    
+    return f"""✅ 已建立新分頁
+
+**名稱:** {tab_name}
+**分頁 ID:** {tab_id}
+**模板:** {template or 'blank'}
+
+🌐 請在瀏覽器 http://localhost:6002 查看"""
+
+
 def register_tab_tools(mcp):
     """註冊分頁管理工具到 MCP"""
+    
+    @mcp.tool()
+    async def create_tab(
+        tab_name: str = Field(description="新分頁的名稱"),
+        template: Optional[str] = Field(
+            default=None,
+            description="模板名稱: 'flowchart' (流程圖) 或 'blank' (空白)。不指定則為空白"
+        )
+    ) -> str:
+        """
+        建立新的圖表分頁。
+        
+        使用情境：
+        - 用戶說「開一個新的圖」
+        - 用戶說「建立新分頁畫架構圖」
+        - 需要在不影響現有圖表的情況下繪製新圖
+        
+        範例：
+        - create_tab(tab_name="流程圖")
+        - create_tab(tab_name="架構圖", template="flowchart")
+        """
+        return await create_tab_impl(tab_name, template)
     
     @mcp.tool()
     async def list_tabs() -> str:

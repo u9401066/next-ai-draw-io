@@ -21,6 +21,7 @@ import { useDiagram } from "@/contexts/diagram-context";
 import { replaceNodes, formatXML } from "@/lib/utils";
 import { ButtonWithTooltip } from "@/components/button-with-tooltip";
 import { SettingsDialog } from "@/components/settings-dialog";
+import { CheckpointControls } from "@/components/checkpoint-controls";
 
 interface ChatPanelProps {
     isVisible: boolean;
@@ -269,6 +270,7 @@ Please retry with an adjusted search pattern or use display_diagram if retries a
                     </Link>
                 </div>
                 <div className="flex items-center gap-2">
+                    <CheckpointControls />
                     <SettingsDialog
                         settings={chatSettings}
                         onSettingsChange={setChatSettings}

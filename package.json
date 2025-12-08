@@ -8,7 +8,10 @@
         "dev:all": "concurrently \"npm run dev\" \"npm run dev:ws\"",
         "build": "next build",
         "start": "next start --port 6001",
-        "lint": "next lint"
+        "lint": "next lint",
+        "test": "vitest",
+        "test:run": "vitest run",
+        "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
         "@ai-sdk/amazon-bedrock": "^3.0.52",
