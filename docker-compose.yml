@@ -1,0 +1,74 @@
+# Next AI Draw.io - Docker Compose
+# 多服務部署配置
+
+services:
+  # Next.js 前端 (含 Draw.io 編輯器)
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "6002:6002"
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_WS_URL=ws://ws-server:6003
+      - NEXT_PUBLIC_USE_WEBSOCKET=true
+      # AI 設定 (可用 .env 覆蓋)
+      - AI_PROVIDER=${AI_PROVIDER:-bedrock}
+      - AI_MODEL=${AI_MODEL:-us.anthropic.claude-sonnet-4-20250514-v1:0}
+      # 各家 API Key
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      # AWS Bedrock
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+    depends_on:
+      - ws-server
+    networks:
+      - drawio-network
+    restart: unless-stopped
+
+  # WebSocket Server (瀏覽器 ↔ MCP 通訊)
+  ws-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.ws
+    ports:
+      - "6003:6003"  # WebSocket
+      - "6004:6004"  # HTTP API
+    environment:
+      - WS_PORT=6003
+      - API_PORT=6004
+    networks:
+      - drawio-network
+    restart: unless-stopped
+
+  # MCP Python Server (Agent 控制)
+  mcp-server:
+    build:
+      context: ./mcp-server
+      dockerfile: Dockerfile
+    ports:
+      - "6005:6005"
+    environment:
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=6005
+      - WEB_URL=http://web:6002
+      - WS_API_URL=http://ws-server:6004
+    depends_on:
+      - web
+      - ws-server
+    networks:
+      - drawio-network
+    restart: unless-stopped
+
+networks:
+  drawio-network:
+    driver: bridge
+
+# 資料持久化 (可選)
+volumes:
+  diagram-data:

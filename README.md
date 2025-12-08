@@ -52,7 +52,27 @@
 
 ---
 
-## 🚀 快速開始
+## � 使用 Docker Compose（推薦）
+
+```bash
+# 複製環境變數範例
+cp env.example .env
+# 編輯 .env 設定 AI Provider
+# 啟動所有服務
+docker compose up -d
+```
+
+開啟 http://localhost:6002
+
+| 服務 | Port | 說明 |
+|------|------|------|
+| `web` | 6002 | Next.js 前端 |
+| `ws-server` | 6003, 6004 | WebSocket + HTTP API |
+| `mcp-server` | 6005 | MCP Python Server |
+
+---
+
+## 🔧 手動安裝（開發用）
 
 ### 1. 複製專案
 
