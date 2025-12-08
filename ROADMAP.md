@@ -71,16 +71,16 @@ lib/
 ```
 
 **實作步驟**：
-- [ ] **Step 0.0.1**：建立目錄結構（`lib/domain`, `lib/application`, `lib/infrastructure`）
-- [ ] **Step 0.0.2**：定義核心領域模型
-  - [ ] `Diagram` 聚合根（封裝 XML 操作）
-  - [ ] `DiagramRepository` 介面
-- [ ] **Step 0.0.3**：建立基礎設施適配器
-  - [ ] `DrawioAdapter`：封裝 draw.io 的 load/export 操作
-  - [ ] `MCPAdapter`：封裝 MCP API 呼叫
-- [ ] **Step 0.0.4**：遷移現有功能到 DDD 架構
-  - [ ] 將 `DiagramContext` 重構為使用 Use Cases
-  - [ ] 保持向後相容（現有 API 不變）
+- [x] **Step 0.0.1**：建立目錄結構（`lib/domain`, `lib/application`, `lib/infrastructure`）
+- [x] **Step 0.0.2**：定義核心領域模型
+  - [x] `Diagram` 聚合根（封裝 XML 操作）
+  - [x] `DiagramRepository` 介面
+- [x] **Step 0.0.3**：建立基礎設施適配器
+  - [x] `DrawioAdapter`：封裝 draw.io 的 load/export 操作
+  - [x] `MCPAdapter`：封裝 MCP API 呼叫
+- [x] **Step 0.0.4**：遷移現有功能到 DDD 架構
+  - [x] 將 `DiagramContext` 重構為使用 Use Cases
+  - [x] 保持向後相容（現有 API 不變）
 
 **預期效益**：
 | 好處 | 說明 |
@@ -129,12 +129,12 @@ interface CheckpointManager {
 ```
 
 **實作步驟**：
-- [ ] **Step 0.1.1**：建立 `lib/checkpoint-manager.ts`
-- [ ] **Step 0.1.2**：修改 `DiagramContext`，每次 `loadDiagram` 前自動儲存 checkpoint
-- [ ] **Step 0.1.3**：新增 `CheckpointPanel` UI 元件（顯示歷史列表）
-- [ ] **Step 0.1.4**：新增快捷鍵 `Ctrl+Shift+Z`（Undo Agent 操作）
-- [ ] **Step 0.1.5**：新增 MCP 工具 `undo_last_operation`
-- [ ] **Step 0.1.6**：持久化到 localStorage（可選）
+- [x] **Step 0.1.1**：建立 `lib/checkpoint-manager.ts`
+- [x] **Step 0.1.2**：修改 `DiagramContext`，每次 `loadDiagram` 前自動儲存 checkpoint
+- [x] **Step 0.1.3**：新增 `CheckpointPanel` UI 元件（顯示歷史列表）
+- [x] **Step 0.1.4**：新增快捷鍵 `Ctrl+Shift+Z`（Undo Agent 操作）
+- [x] **Step 0.1.5**：新增 MCP 工具 `undo_last_operation`
+- [x] **Step 0.1.6**：持久化到 localStorage（可選）
 
 **觸發時機**：
 | 事件 | 自動儲存 Checkpoint? |
@@ -201,9 +201,9 @@ async def create_tab(
 ```
 
 **實作步驟**：
-- [ ] **Step 0.2.1**：在 `tab_tools.py` 新增 `create_tab_impl` 和 `create_tab`
-- [ ] **Step 0.2.2**：在 `tools/__init__.py` 註冊新工具
-- [ ] **Step 0.2.3**：測試 Agent 建立新分頁功能
+- [x] **Step 0.2.1**：在 `tab_tools.py` 新增 `create_tab_impl` 和 `create_tab`
+- [x] **Step 0.2.2**：在 `tools/__init__.py` 註冊新工具
+- [x] **Step 0.2.3**：測試 Agent 建立新分頁功能
 
 ---
 
@@ -236,17 +236,17 @@ tests/
 ```
 
 **實作步驟**：
-- [ ] **Step 0.3.1**：安裝 Vitest + Playwright + pytest
+- [x] **Step 0.3.1**：安裝 Vitest + Playwright + pytest
   ```bash
   npm install -D vitest @vitejs/plugin-react @testing-library/react @testing-library/jest-dom
   npm install -D playwright @playwright/test
   pip install pytest pytest-asyncio pytest-cov
   ```
-- [ ] **Step 0.3.2**：建立 `vitest.config.ts`
-- [ ] **Step 0.3.3**：建立 `playwright.config.ts`
-- [ ] **Step 0.3.4**：建立 `tests/` 目錄結構
-- [ ] **Step 0.3.5**：寫第一個測試（checkpoint-manager）
-- [ ] **Step 0.3.6**：加入 CI 覆蓋率報告（GitHub Actions）
+- [x] **Step 0.3.2**：建立 `vitest.config.ts`
+- [x] **Step 0.3.3**：建立 `playwright.config.ts`
+- [x] **Step 0.3.4**：建立 `tests/` 目錄結構
+- [x] **Step 0.3.5**：寫第一個測試（checkpoint-manager）
+- [x] **Step 0.3.6**：加入 CI 覆蓋率報告（GitHub Actions）
 
 ---
 
@@ -426,20 +426,6 @@ SMART_TOOLS = {
             "分層：用戶→前端→後端→資料庫",
             "標註服務名稱和連接埠"
         ]
-    },
-    
-    # ===== 關係圖系列 =====
-    "draw_er_diagram": {
-        "description": "繪製 ER 圖（資料庫關係）",
-        "category": "database",
-        "default_preset": {
-            "edge": {
-                "style": "entityRelation",
-                "arrowStart": "ERmany",
-                "arrowEnd": "ERone"
-            },
-            "shape": {"palette": "database"}
-        }
     },
     
     "draw_sequence": {

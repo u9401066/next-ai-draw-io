@@ -96,14 +96,28 @@ No installation needed! Try the app directly on our demo site:
 
 > Note: Due to high traffic, the demo site currently uses Claude Haiku 4.5. For best results, we recommend self-hosting with Claude Opus 4.5.
 
-### Run with Docker (Recommended)
+### 🐳 Run with Docker Compose (Recommended)
 
-If you just want to run it locally, the best way is to use Docker.
+The easiest way to run the full stack (Next.js Application + WebSocket Server + MCP Server) is using Docker Compose.
 
-First, install Docker if you haven't already: [Get Docker](https://docs.docker.com/get-docker/)
+1. **Install Docker Desktop**: [Get Docker](https://docs.docker.com/get-docker/)
 
-Then run:
+2. **Start Services**:
+   ```bash
+   docker compose up -d
+   ```
 
+   This will start:
+   - **Web UI**: http://localhost:6002
+   - **WebSocket Server**: ws://localhost:6003
+   - **MCP Server**: http://localhost:6005
+
+3. **Stop Services**:
+   ```bash
+   docker compose down
+   ```
+
+### Run with Docker (Single Container)
 ```bash
 docker run -d -p 3000:3000 \
   -e AI_PROVIDER=openai \
