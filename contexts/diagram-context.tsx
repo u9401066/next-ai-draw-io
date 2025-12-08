@@ -7,6 +7,8 @@ import { DiagramDiffTracker } from "../lib/diagram-diff-tracker";
 import { DiagramOperationsHandler, DiagramOperation, ApplyResult } from "../lib/diagram-operations-handler";
 import { useWebSocket } from "../lib/websocket/useWebSocket";
 import type { DiagramUpdateMessage, PendingOperationsMessage, HumanChanges } from "../lib/websocket/types";
+// DDD Checkpoint Integration
+import { CheckpointManager, Checkpoint, CheckpointSource } from "../lib/domain/checkpoint";
 
 // WebSocket 設定
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:6003";
@@ -30,6 +32,14 @@ interface DiagramContextType {
     setBaseState: () => void;
     // WebSocket 狀態
     isWsConnected: boolean;
+    // DDD Checkpoint 功能
+    saveCheckpoint: (source: CheckpointSource, description?: string) => Checkpoint | null;
+    undoCheckpoint: () => Checkpoint | null;
+    redoCheckpoint: () => Checkpoint | null;
+    canUndo: boolean;
+    canRedo: boolean;
+    checkpointCount: number;
+    checkpointList: Checkpoint[];
 }
 
 const DiagramContext = createContext<DiagramContextType | undefined>(undefined);
@@ -39,13 +49,21 @@ export function DiagramProvider({ children }: { children: React.ReactNode }) {
     const [latestSvg, setLatestSvg] = useState<string>("");
     const [diagramHistory, setDiagramHistory] = useState<
         { svg: string; xml: string }[]
-    >([]); 
+    >([]);
     const [activeTabId, setActiveTabId] = useState<string | null>(null);
     const drawioRef = useRef<DrawIoEmbedRef | null>(null);
     const resolverRef = useRef<((value: string) => void) | null>(null);
-    
+
     // Diff 追蹤相關
     const opsHandlerRef = useRef<DiagramOperationsHandler>(new DiagramOperationsHandler());
+
+    // DDD Checkpoint Manager
+    const checkpointManagerRef = useRef<CheckpointManager>(new CheckpointManager(50));
+    const [canUndo, setCanUndo] = useState(false);
+    const [canRedo, setCanRedo] = useState(false);
+    const [checkpointCount, setCheckpointCount] = useState(0);
+    const [checkpointList, setCheckpointList] = useState<Checkpoint[]>([]);
+    const currentDiagramId = activeTabId || 'default';
 
     const handleExport = () => {
         if (drawioRef.current) {
@@ -70,7 +88,7 @@ export function DiagramProvider({ children }: { children: React.ReactNode }) {
             dataPrefix: data.data?.substring?.(0, 100),
             message: data.message,
         });
-        
+
         // Log debug info to server for easier debugging
         fetch('/api/mcp', {
             method: 'POST',
@@ -82,8 +100,8 @@ export function DiagramProvider({ children }: { children: React.ReactNode }) {
                 dataPrefix: data.data?.substring?.(0, 100),
                 format: data.format,
             }),
-        }).catch(() => {});
-        
+        }).catch(() => { });
+
         try {
             const extractedXML = extractDiagramXML(data.data);
             if (extractedXML) {
@@ -98,7 +116,7 @@ export function DiagramProvider({ children }: { children: React.ReactNode }) {
                 ]);
                 // 更新 diff tracker
                 opsHandlerRef.current.updateXml(extractedXML);
-                
+
                 if (resolverRef.current) {
                     resolverRef.current(extractedXML);
                     resolverRef.current = null;
@@ -116,7 +134,7 @@ export function DiagramProvider({ children }: { children: React.ReactNode }) {
                     error: String(error),
                     dataPrefix: data.data?.substring?.(0, 200),
                 }),
-            }).catch(() => {});
+            }).catch(() => { });
             // Still store the raw data even if extraction fails
             setLatestSvg(data.data);
         }
@@ -132,12 +150,12 @@ export function DiagramProvider({ children }: { children: React.ReactNode }) {
     };
 
     // === Diff 相關函數 ===
-    
+
     // 取得用戶變更
     const getHumanChanges = useCallback(() => {
         return opsHandlerRef.current.getHumanChanges();
     }, []);
-    
+
     // 應用操作
     const applyOperations = useCallback((ops: DiagramOperation[], preserveUserChanges: boolean = true) => {
         const result = opsHandlerRef.current.applyOperations(ops, preserveUserChanges);
@@ -148,27 +166,80 @@ export function DiagramProvider({ children }: { children: React.ReactNode }) {
         }
         return result;
     }, []);
-    
+
     // 取得元素列表
     const getElements = useCallback((type?: 'nodes' | 'edges') => {
         return opsHandlerRef.current.getElements(type);
     }, []);
-    
+
     // 同步狀態
     const syncState = useCallback(() => {
         return opsHandlerRef.current.syncState();
     }, []);
-    
+
     // 設定基準狀態（Agent 完成操作後呼叫）
     const setBaseState = useCallback(() => {
         opsHandlerRef.current.setCurrentXml(chartXML);
     }, [chartXML]);
 
+    // === DDD Checkpoint 相關函數 ===
+
+    // 更新 checkpoint 狀態的輔助函數
+    const updateCheckpointState = useCallback(() => {
+        const manager = checkpointManagerRef.current;
+        setCanUndo(manager.canUndo(currentDiagramId));
+        setCanRedo(manager.canRedo(currentDiagramId));
+        setCheckpointCount(manager.count(currentDiagramId));
+        setCheckpointList(manager.list(currentDiagramId));
+    }, [currentDiagramId]);
+
+    // 儲存檢查點
+    const saveCheckpoint = useCallback((source: CheckpointSource, description?: string): Checkpoint | null => {
+        if (!chartXML) return null;
+
+        const checkpoint = checkpointManagerRef.current.save(
+            currentDiagramId,
+            chartXML,
+            latestSvg,
+            source,
+            description
+        );
+        updateCheckpointState();
+        console.log('[DiagramContext] Checkpoint saved:', checkpoint.id.value, source);
+        return checkpoint;
+    }, [chartXML, latestSvg, currentDiagramId, updateCheckpointState]);
+
+    // Undo - 回到上一個檢查點
+    const undoCheckpoint = useCallback((): Checkpoint | null => {
+        const checkpoint = checkpointManagerRef.current.undo(currentDiagramId);
+        if (checkpoint) {
+            loadDiagram(checkpoint.xml);
+            setChartXML(checkpoint.xml);
+            setLatestSvg(checkpoint.svg);
+            updateCheckpointState();
+            console.log('[DiagramContext] Undo to checkpoint:', checkpoint.id.value);
+        }
+        return checkpoint;
+    }, [currentDiagramId, updateCheckpointState]);
+
+    // Redo - 前進到下一個檢查點
+    const redoCheckpoint = useCallback((): Checkpoint | null => {
+        const checkpoint = checkpointManagerRef.current.redo(currentDiagramId);
+        if (checkpoint) {
+            loadDiagram(checkpoint.xml);
+            setChartXML(checkpoint.xml);
+            setLatestSvg(checkpoint.svg);
+            updateCheckpointState();
+            console.log('[DiagramContext] Redo to checkpoint:', checkpoint.id.value);
+        }
+        return checkpoint;
+    }, [currentDiagramId, updateCheckpointState]);
+
     // === WebSocket 處理 ===
-    
+
     // 用 ref 保存 sendOperationResult 避免循環依賴
     const sendOperationResultRef = useRef<typeof sendOperationResult | null>(null);
-    
+
     // 處理圖表更新訊息
     const handleDiagramUpdateWS = useCallback((payload: DiagramUpdateMessage['payload']) => {
         console.log('[DiagramContext WS] Diagram update received:', payload.action);
@@ -176,13 +247,13 @@ export function DiagramProvider({ children }: { children: React.ReactNode }) {
         setChartXML(payload.xml);
         setActiveTabId(payload.tabId);
     }, []);
-    
+
     // 處理待執行操作訊息
     const handlePendingOperationsWS = useCallback((payload: PendingOperationsMessage['payload']) => {
         console.log('[DiagramContext WS] Pending operations received:', payload.operations);
-        
+
         const result = applyOperations(payload.operations, payload.preserveUserChanges);
-        
+
         // 透過 WebSocket 回報結果（使用 ref 避免循環依賴）
         sendOperationResultRef.current?.(
             payload.requestId,
@@ -192,7 +263,7 @@ export function DiagramProvider({ children }: { children: React.ReactNode }) {
             result.newXml
         );
     }, [applyOperations]);
-    
+
     // WebSocket 連線（條件啟用）
     const {
         isConnected: isWsConnected,
@@ -215,12 +286,12 @@ export function DiagramProvider({ children }: { children: React.ReactNode }) {
             console.log('[DiagramContext] WebSocket disconnected');
         },
     });
-    
+
     // 更新 ref
     useEffect(() => {
         sendOperationResultRef.current = sendOperationResult;
     }, [sendOperationResult]);
-    
+
     // 當 tab 變更時重新訂閱
     useEffect(() => {
         if (isWsConnected && activeTabId) {
@@ -229,21 +300,21 @@ export function DiagramProvider({ children }: { children: React.ReactNode }) {
     }, [isWsConnected, activeTabId, subscribe]);
 
     // === Fallback: 輪詢處理（僅在 WebSocket 未連線時使用）===
-    
+
     // 檢查並執行待處理操作
     const checkAndApplyPendingOperations = useCallback(async () => {
         // 如果 WebSocket 已連線，不使用 polling
         if (isWsConnected) return;
-        
+
         try {
             const response = await fetch('/api/mcp?action=check_pending_ops');
             const data = await response.json();
-            
+
             if (data.hasPending && data.operations) {
                 console.log('[DiagramContext Polling] Applying pending operations:', data.operations);
-                
+
                 const result = applyOperations(data.operations, data.preserveUserChanges ?? true);
-                
+
                 // 回報結果
                 await fetch('/api/mcp', {
                     method: 'POST',
@@ -264,19 +335,19 @@ export function DiagramProvider({ children }: { children: React.ReactNode }) {
             console.error('[DiagramContext Polling] Error checking pending operations:', error);
         }
     }, [applyOperations, isWsConnected]);
-    
+
     // 回報用戶變更
     const reportChangesToServer = useCallback(async () => {
         if (!chartXML) return;
-        
+
         const changes = getHumanChanges();
-        
+
         // 優先使用 WebSocket
         if (isWsConnected && activeTabId) {
             sendChangesReport(activeTabId, changes as HumanChanges);
             return;
         }
-        
+
         // Fallback 到 HTTP
         try {
             await fetch('/api/mcp', {
@@ -291,16 +362,16 @@ export function DiagramProvider({ children }: { children: React.ReactNode }) {
             console.error('[DiagramContext Polling] Error reporting changes:', error);
         }
     }, [chartXML, getHumanChanges, isWsConnected, activeTabId, sendChangesReport]);
-    
+
     // 設定輪詢 interval（僅作為 fallback）
     useEffect(() => {
         // 如果 WebSocket 已連線，使用更長的間隔或不啟用
         const pollInterval = isWsConnected ? 10000 : 2000;  // WS 連線時 10 秒，否則 2 秒
         const changesInterval = isWsConnected ? 10000 : 3000;  // WS 連線時 10 秒，否則 3 秒
-        
+
         const opsTimer = setInterval(checkAndApplyPendingOperations, pollInterval);
         const changesTimer = setInterval(reportChangesToServer, changesInterval);
-        
+
         return () => {
             clearInterval(opsTimer);
             clearInterval(changesTimer);
@@ -327,6 +398,14 @@ export function DiagramProvider({ children }: { children: React.ReactNode }) {
                 setBaseState,
                 // WebSocket 狀態
                 isWsConnected,
+                // DDD Checkpoint 功能
+                saveCheckpoint,
+                undoCheckpoint,
+                redoCheckpoint,
+                canUndo,
+                canRedo,
+                checkpointCount,
+                checkpointList,
             }}
         >
             {children}
