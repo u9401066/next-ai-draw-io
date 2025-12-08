@@ -26,6 +26,170 @@
 - [x] 繁體中文介面
 - [x] Markdown 訊息渲染
 - [x] **繪圖指南框架** (`drawing_guidelines.py` - 尚未整合到前端)
+- [x] 基本歷史記錄（`diagramHistory` + `HistoryDialog`）
+
+---
+
+## 🚨 Phase 0：關鍵修復（最高優先）
+
+> ⚠️ **必須先完成**：這些問題會影響基本使用體驗
+
+### 🔄 0.1 Checkpoint 系統（解決 Agent 操作不可回復）
+
+**問題**：Agent 載入新 XML 會清除 draw.io 內建的 Undo 歷史！
+
+**解決方案**：自建 Checkpoint 系統
+
+```typescript
+// lib/checkpoint-manager.ts
+
+interface Checkpoint {
+  id: string;
+  xml: string;
+  svg: string;
+  timestamp: Date;
+  source: 'user' | 'agent';
+  description: string;       // e.g., "Agent: 新增流程圖", "User: 手動編輯"
+  parentId: string | null;   // 支援分支歷史
+}
+
+interface CheckpointManager {
+  checkpoints: Checkpoint[];
+  currentIndex: number;
+  
+  // 核心操作
+  save(source: 'user' | 'agent', description?: string): Checkpoint;
+  undo(): Checkpoint | null;  // 回到上一個 checkpoint
+  redo(): Checkpoint | null;  // 前進到下一個 checkpoint
+  goTo(id: string): Checkpoint | null;  // 跳到指定 checkpoint
+  
+  // 查詢
+  list(): Checkpoint[];
+  getCurrent(): Checkpoint;
+  canUndo(): boolean;
+  canRedo(): boolean;
+}
+```
+
+**實作步驟**：
+- [ ] **Step 0.1.1**：建立 `lib/checkpoint-manager.ts`
+- [ ] **Step 0.1.2**：修改 `DiagramContext`，每次 `loadDiagram` 前自動儲存 checkpoint
+- [ ] **Step 0.1.3**：新增 `CheckpointPanel` UI 元件（顯示歷史列表）
+- [ ] **Step 0.1.4**：新增快捷鍵 `Ctrl+Shift+Z`（Undo Agent 操作）
+- [ ] **Step 0.1.5**：新增 MCP 工具 `undo_last_operation`
+- [ ] **Step 0.1.6**：持久化到 localStorage（可選）
+
+**觸發時機**：
+| 事件 | 自動儲存 Checkpoint? |
+|------|---------------------|
+| Agent 呼叫 `display_diagram` | ✅ 是 |
+| Agent 呼叫 `apply_diagram_changes` | ✅ 是 |
+| 用戶在 draw.io 中編輯（失去焦點時） | ✅ 是 |
+| 用戶點擊「儲存檢查點」按鈕 | ✅ 是 |
+
+---
+
+### 📑 0.2 修復分頁功能（新增 create_tab）
+
+**問題**：MCP 沒有 `create_tab` 工具，Agent 無法建立新分頁！
+
+**解決方案**：在 `tab_tools.py` 新增工具
+
+```python
+# mcp-server/src/drawio_mcp_server/tools/tab_tools.py 新增
+
+async def create_tab_impl(tab_name: str, initial_xml: Optional[str] = None) -> str:
+    """建立新的圖表分頁"""
+    if not web_client.is_running():
+        return "⚠️ Draw.io Web 未運行"
+    
+    # 如果沒有初始 XML，使用空白模板
+    if not initial_xml:
+        initial_xml = '''<mxfile>
+            <diagram name="{}" id="new-tab">
+                <mxGraphModel>
+                    <root>
+                        <mxCell id="0"/>
+                        <mxCell id="1" parent="0"/>
+                    </root>
+                </mxGraphModel>
+            </diagram>
+        </mxfile>'''.format(tab_name)
+    
+    result = await web_client.send(
+        action="display",
+        xml=initial_xml,
+        tab_name=tab_name
+    )
+    
+    if "error" in result:
+        return f"❌ 建立分頁失敗: {result['error']}"
+    
+    return f"✅ 已建立新分頁: {tab_name} (ID: {result.get('tabId', 'unknown')})"
+
+@mcp.tool()
+async def create_tab(
+    tab_name: str = Field(description="新分頁的名稱"),
+    template: Optional[str] = Field(default=None, description="模板名稱，如 'flowchart', 'er_diagram', 'blank'")
+) -> str:
+    """
+    建立新的圖表分頁。
+    
+    使用情境：
+    - 用戶說「開一個新的圖」
+    - 用戶說「建立新分頁畫架構圖」
+    - 需要在不影響現有圖表的情況下繪製新圖
+    """
+    return await create_tab_impl(tab_name)
+```
+
+**實作步驟**：
+- [ ] **Step 0.2.1**：在 `tab_tools.py` 新增 `create_tab_impl` 和 `create_tab`
+- [ ] **Step 0.2.2**：在 `tools/__init__.py` 註冊新工具
+- [ ] **Step 0.2.3**：測試 Agent 建立新分頁功能
+
+---
+
+### 🧪 0.3 測試基礎設施
+
+**推薦配置**：
+
+| 層級 | 框架 | 用途 |
+|------|------|------|
+| **單元測試** | Vitest | TypeScript/React 元件測試 |
+| **E2E 測試** | Playwright | 瀏覽器端對端測試 |
+| **Python 測試** | pytest | MCP Server 測試 |
+| **覆蓋率** | c8 + coverage.py | 整合覆蓋率報告 |
+
+**目錄結構**：
+```
+tests/
+├── unit/                    # Vitest 單元測試
+│   ├── lib/
+│   │   ├── checkpoint-manager.test.ts
+│   │   └── diagram-diff-tracker.test.ts
+│   └── components/
+│       └── chat-panel.test.tsx
+├── e2e/                     # Playwright E2E 測試
+│   ├── diagram-creation.spec.ts
+│   └── mcp-integration.spec.ts
+└── mcp-server/              # Python pytest
+    ├── test_diagram_tools.py
+    └── test_tab_tools.py
+```
+
+**實作步驟**：
+- [ ] **Step 0.3.1**：安裝 Vitest + Playwright + pytest
+  ```bash
+  npm install -D vitest @vitejs/plugin-react @testing-library/react @testing-library/jest-dom
+  npm install -D playwright @playwright/test
+  pip install pytest pytest-asyncio pytest-cov
+  ```
+- [ ] **Step 0.3.2**：建立 `vitest.config.ts`
+- [ ] **Step 0.3.3**：建立 `playwright.config.ts`
+- [ ] **Step 0.3.4**：建立 `tests/` 目錄結構
+- [ ] **Step 0.3.5**：寫第一個測試（checkpoint-manager）
+- [ ] **Step 0.3.6**：加入 CI 覆蓋率報告（GitHub Actions）
 
 ---
 

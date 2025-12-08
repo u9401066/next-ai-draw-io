@@ -28,14 +28,24 @@
 - ✅ **圖片轉圖表**：上傳圖片自動轉換為可編輯圖表
 - ✅ **動態連接線**：支援 `flowAnimation=1` 動畫效果
 - ✅ **可調整面板**：拖曳調整聊天面板大小
+- ✅ **歷史記錄**：Session 內的圖表版本歷史
 
 ### MCP 整合（獨家功能）
 - ✅ **GitHub Copilot Agent 控制**：在 VS Code 中直接操作圖表
 - ✅ **圖表變更追蹤**：Agent 可查詢使用者的編輯操作
 - ✅ **雙向通訊**：MCP Server ↔ 瀏覽器 即時同步
 - ✅ **設定同步**：前端設定自動同步到 Agent
+- ✅ **增量操作**：`apply_diagram_changes` 避免爆 token
+
+### ⚠️ 已知問題（開發中修復）
+| 問題 | 狀態 | 說明 |
+|------|------|------|
+| Agent 操作無法 Undo | 🔧 Phase 0.1 | 載入 XML 會清除 draw.io Undo 歷史 |
+| 無法建立新分頁 | 🔧 Phase 0.2 | MCP 缺少 `create_tab` 工具 |
+| 無測試覆蓋率 | 🔧 Phase 0.3 | 需建立 Vitest + Playwright + pytest |
 
 ### 企業級規劃
+- 🔜 **Checkpoint 系統**：完整的操作回復機制
 - 🔜 **HTTPS 強制**：生產環境安全傳輸
 - 🔜 **存取控制**：Access Code 驗證機制
 - 🔜 **繪圖偏好系統**：可儲存的樣式 Preset
