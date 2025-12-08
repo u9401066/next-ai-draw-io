@@ -1,243 +1,244 @@
-# Next-AI-Draw-IO (Fork)
+# Next AI Draw.io
 
-> 🎨 **AI 驅動的互動式流程圖繪製工具** — 專為研究流程圖設計，整合 MCP Server 與 GitHub Copilot
+<div align="center">
 
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+**AI-Powered Diagram Creation Tool - Chat, Draw, Visualize**
 
----
+English | [中文](./docs/README_CN.md) | [日本語](./docs/README_JA.md)
 
-## 🌟 專案特色
+[![TrendShift](https://trendshift.io/api/badge/repositories/15449)](https://next-ai-drawio.jiang.jp/)
 
-這是 [DayuanJiang/next-ai-draw-io](https://github.com/DayuanJiang/next-ai-draw-io) 的增強版 fork，專注於：
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Next.js](https://img.shields.io/badge/Next.js-16.x-black)](https://nextjs.org/)
+[![React](https://img.shields.io/badge/React-19.x-61dafb)](https://react.dev/)
+[![Sponsor](https://img.shields.io/badge/Sponsor-❤-ea4aaa)](https://github.com/sponsors/DayuanJiang)
 
-| 特色 | 說明 |
-|------|------|
-| 🔬 **研究導向** | 針對學術研究流程圖、實驗架構圖優化 |
-| 🤖 **MCP Server** | 透過 Model Context Protocol 與 GitHub Copilot 整合 |
-| 🔄 **即時同步** | WebSocket 雙向通訊，圖表即時更新 |
-| 🎯 **DDD 架構** | 採用 Domain-Driven Design 架構設計 |
-| 🌐 **繁體中文** | 完整的繁體中文介面 |
+[![Live Demo](./public/live-demo-button.svg)](https://next-ai-drawio.jiang.jp/)
 
----
+</div>
 
-## ✨ 功能一覽
+A Next.js web application that integrates AI capabilities with draw.io diagrams. Create, modify, and enhance diagrams through natural language commands and AI-assisted visualization.
 
-### 核心功能
-- ✅ **多模型 AI 支援**：AWS Bedrock、OpenAI、Anthropic、Google、Azure、Ollama、OpenRouter、DeepSeek
-- ✅ **自然語言繪圖**：用對話方式創建和修改流程圖
-- ✅ **圖片轉圖表**：上傳圖片自動轉換為可編輯圖表
-- ✅ **動態連接線**：支援 `flowAnimation=1` 動畫效果
-- ✅ **可調整面板**：拖曳調整聊天面板大小
-- ✅ **歷史記錄**：Session 內的圖表版本歷史
+https://github.com/user-attachments/assets/b2eef5f3-b335-4e71-a755-dc2e80931979
 
-### MCP 整合（獨家功能）
-- ✅ **GitHub Copilot Agent 控制**：在 VS Code 中直接操作圖表
-- ✅ **圖表變更追蹤**：Agent 可查詢使用者的編輯操作
-- ✅ **雙向通訊**：MCP Server ↔ 瀏覽器 即時同步
-- ✅ **設定同步**：前端設定自動同步到 Agent
-- ✅ **增量操作**：`apply_diagram_changes` 避免爆 token
+## Table of Contents
+- [Next AI Draw.io ](#next-ai-drawio-)
+  - [Table of Contents](#table-of-contents)
+  - [Examples](#examples)
+  - [Features](#features)
+  - [Getting Started](#getting-started)
+    - [Try it Online](#try-it-online)
+    - [Run with Docker (Recommended)](#run-with-docker-recommended)
+    - [Installation](#installation)
+  - [Deployment](#deployment)
+  - [Multi-Provider Support](#multi-provider-support)
+  - [How It Works](#how-it-works)
+  - [Project Structure](#project-structure)
+  - [Support \& Contact](#support--contact)
+  - [Star History](#star-history)
 
-### ⚠️ 已知問題（開發中修復）
-| 問題 | 狀態 | 說明 |
-|------|------|------|
-| Agent 操作無法 Undo | 🔧 Phase 0.1 | 載入 XML 會清除 draw.io Undo 歷史 |
-| 無法建立新分頁 | 🔧 Phase 0.2 | MCP 缺少 `create_tab` 工具 |
-| 無測試覆蓋率 | 🔧 Phase 0.3 | 需建立 Vitest + Playwright + pytest |
+## Examples
 
-### 企業級規劃
-- 🔜 **Checkpoint 系統**：完整的操作回復機制
-- 🔜 **HTTPS 強制**：生產環境安全傳輸
-- 🔜 **存取控制**：Access Code 驗證機制
-- 🔜 **繪圖偏好系統**：可儲存的樣式 Preset
+Here are some example prompts and their generated diagrams:
 
----
+<div align="center">
+<table width="100%">
+  <tr>
+    <td colspan="2" valign="top" align="center">
+      <strong>Animated transformer connectors</strong><br />
+      <p><strong>Prompt:</strong> Give me a **animated connector** diagram of transformer's architecture.</p>
+      <img src="./public/animated_connectors.svg" alt="Transformer Architecture with Animated Connectors" width="480" />
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <strong>GCP architecture diagram</strong><br />
+      <p><strong>Prompt:</strong> Generate a GCP architecture diagram with **GCP icons**. In this diagram, users connect to a frontend hosted on an instance.</p>
+      <img src="./public/gcp_demo.svg" alt="GCP Architecture Diagram" width="480" />
+    </td>
+    <td width="50%" valign="top">
+      <strong>AWS architecture diagram</strong><br />
+      <p><strong>Prompt:</strong> Generate a AWS architecture diagram with **AWS icons**. In this diagram, users connect to a frontend hosted on an instance.</p>
+      <img src="./public/aws_demo.svg" alt="AWS Architecture Diagram" width="480" />
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <strong>Azure architecture diagram</strong><br />
+      <p><strong>Prompt:</strong> Generate a Azure architecture diagram with **Azure icons**. In this diagram, users connect to a frontend hosted on an instance.</p>
+      <img src="./public/azure_demo.svg" alt="Azure Architecture Diagram" width="480" />
+    </td>
+    <td width="50%" valign="top">
+      <strong>Cat sketch prompt</strong><br />
+      <p><strong>Prompt:</strong> Draw a cute cat for me.</p>
+      <img src="./public/cat_demo.svg" alt="Cat Drawing" width="240" />
+    </td>
+  </tr>
+</table>
+</div>
 
-## � 使用 Docker Compose（推薦）
+## Features
+
+-   **LLM-Powered Diagram Creation**: Leverage Large Language Models to create and manipulate draw.io diagrams directly through natural language commands
+-   **Image-Based Diagram Replication**: Upload existing diagrams or images and have the AI replicate and enhance them automatically
+-   **Diagram History**: Comprehensive version control that tracks all changes, allowing you to view and restore previous versions of your diagrams before the AI editing.
+-   **Interactive Chat Interface**: Communicate with AI to refine your diagrams in real-time
+-   **AWS Architecture Diagram Support**: Specialized support for generating AWS architecture diagrams
+-   **Animated Connectors**: Create dynamic and animated connectors between diagram elements for better visualization
+
+## Getting Started
+
+### Try it Online
+
+No installation needed! Try the app directly on our demo site:
+
+[![Live Demo](./public/live-demo-button.svg)](https://next-ai-drawio.jiang.jp/)
+
+> Note: Due to high traffic, the demo site currently uses Claude Haiku 4.5. For best results, we recommend self-hosting with Claude Opus 4.5.
+
+### Run with Docker (Recommended)
+
+If you just want to run it locally, the best way is to use Docker.
+
+First, install Docker if you haven't already: [Get Docker](https://docs.docker.com/get-docker/)
+
+Then run:
 
 ```bash
-# 複製環境變數範例
-cp env.example .env
-# 編輯 .env 設定 AI Provider
-# 啟動所有服務
-docker compose up -d
+docker run -d -p 3000:3000 \
+  -e AI_PROVIDER=openai \
+  -e AI_MODEL=gpt-4o \
+  -e OPENAI_API_KEY=your_api_key \
+  ghcr.io/dayuanjiang/next-ai-draw-io:latest
 ```
 
-開啟 http://localhost:6002
-
-| 服務 | Port | 說明 |
-|------|------|------|
-| `web` | 6002 | Next.js 前端 |
-| `ws-server` | 6003, 6004 | WebSocket + HTTP API |
-| `mcp-server` | 6005 | MCP Python Server |
-
----
-
-## 🔧 手動安裝（開發用）
-
-### 1. 複製專案
+Or use an env file (create one from `env.example`):
 
 ```bash
-git clone https://github.com/u9401066/next-ai-draw-io
+cp env.example .env
+# Edit .env with your configuration
+docker run -d -p 3000:3000 --env-file .env ghcr.io/dayuanjiang/next-ai-draw-io:latest
+```
+
+Open [http://localhost:3000](http://localhost:3000) in your browser.
+
+Replace the environment variables with your preferred AI provider configuration. See [Multi-Provider Support](#multi-provider-support) for available options.
+
+### Installation
+
+1. Clone the repository:
+
+```bash
+git clone https://github.com/DayuanJiang/next-ai-draw-io
 cd next-ai-draw-io
 ```
 
-### 2. 安裝依賴
+2. Install dependencies:
 
 ```bash
 npm install
 ```
 
-### 3. 設定環境變數
+3. Configure your AI provider:
+
+Create a `.env.local` file in the root directory:
 
 ```bash
 cp env.example .env.local
 ```
 
-編輯 `.env.local`，設定您的 AI Provider：
+Edit `.env.local` and configure your chosen provider:
 
-```env
-# AWS Bedrock (預設)
-AI_PROVIDER=bedrock
-AWS_ACCESS_KEY_ID=your_key
-AWS_SECRET_ACCESS_KEY=your_secret
-AWS_REGION=us-east-1
+-   Set `AI_PROVIDER` to your chosen provider (bedrock, openai, anthropic, google, azure, ollama, openrouter, deepseek, siliconflow)
+-   Set `AI_MODEL` to the specific model you want to use
+-   Add the required API keys for your provider
+-   `TEMPERATURE`: Optional temperature setting (e.g., `0` for deterministic output). Leave unset for models that don't support it (e.g., reasoning models).
+-   `ACCESS_CODE_LIST`: Optional access password(s), can be comma-separated for multiple passwords.
 
-# 或使用其他 Provider
-# AI_PROVIDER=openai
-# OPENAI_API_KEY=sk-xxx
-```
+> Warning: If you do not set `ACCESS_CODE_LIST`, anyone can access your deployed site directly, which may lead to rapid depletion of your token. It is recommended to set this option.
 
-### 4. 啟動開發伺服器
+See the [Provider Configuration Guide](./docs/ai-providers.md) for detailed setup instructions for each provider.
+
+4. Run the development server:
 
 ```bash
-# 僅啟動 Next.js
 npm run dev
-
-# 同時啟動 WebSocket Server（推薦）
-npm run dev:all
 ```
 
-開啟 http://localhost:6002
+5. Open [http://localhost:3000](http://localhost:3000) in your browser to see the application.
 
----
+## Deployment
 
-## 🤖 GitHub Copilot MCP 整合
+The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new) from the creators of Next.js.
 
-### 設定步驟
+Check out the [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
 
-1. **確保應用程式運行中**
-   ```bash
-   npm run dev:all
-   ```
+Or you can deploy by this button.
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FDayuanJiang%2Fnext-ai-draw-io)
 
-2. **設定 VS Code MCP**
+Be sure to **set the environment variables** in the Vercel dashboard as you did in your local `.env.local` file.
 
-   在 VS Code 的 `settings.json` 中加入：
-   ```json
-   {
-     "github.copilot.chat.mcpServers": {
-       "next-ai-draw-io": {
-         "type": "stdio",
-         "command": "uv",
-         "args": ["run", "--directory", "path/to/next-ai-draw-io/mcp-server", "drawio-mcp-server"],
-         "env": {
-           "WEB_APP_URL": "http://localhost:6002"
-         }
-       }
-     }
-   }
-   ```
 
-3. **在 Copilot Chat 中使用**
-   ```
-   @next-ai-draw-io 幫我畫一個研究流程圖
-   ```
+## Multi-Provider Support
 
----
+-   AWS Bedrock (default)
+-   OpenAI
+-   Anthropic
+-   Google AI
+-   Azure OpenAI
+-   Ollama
+-   OpenRouter
+-   DeepSeek
+-   SiliconFlow
 
-## 📁 專案架構
+All providers except AWS Bedrock and OpenRouter support custom endpoints.
+
+📖 **[Detailed Provider Configuration Guide](./docs/ai-providers.md)** - See setup instructions for each provider.
+
+**Model Requirements**: This task requires strong model capabilities for generating long-form text with strict formatting constraints (draw.io XML). Recommended models include Claude Sonnet 4.5, GPT-4o, Gemini 2.0, and DeepSeek V3/R1.
+
+Note that `claude-sonnet-4-5` has trained on draw.io diagrams with AWS logos, so if you want to create AWS architecture diagrams, this is the best choice.
+
+
+## How It Works
+
+The application uses the following technologies:
+
+-   **Next.js**: For the frontend framework and routing
+-   **Vercel AI SDK** (`ai` + `@ai-sdk/*`): For streaming AI responses and multi-provider support
+-   **react-drawio**: For diagram representation and manipulation
+
+Diagrams are represented as XML that can be rendered in draw.io. The AI processes your commands and generates or modifies this XML accordingly.
+
+## Project Structure
 
 ```
-next-ai-draw-io/
-├── app/                    # Next.js App Router
-│   ├── api/
-│   │   ├── chat/          # AI Chat API
-│   │   └── mcp/           # MCP Control API
-│   └── page.tsx           # 主頁面
-├── components/             # React 元件
-│   ├── ui/                # UI 基礎元件
-│   ├── chat-panel.tsx     # 聊天面板
-│   └── settings-dialog.tsx # 設定對話框
-├── lib/                    # 工具函數
-│   ├── ai-providers.ts    # AI Provider 配置
-│   └── use-mcp-polling.ts # MCP 輪詢 Hook
-├── mcp-server/            # Python MCP Server
-│   └── src/
-│       └── drawio_mcp_server/
-│           ├── tools/     # MCP 工具
-│           └── drawing_guidelines.py  # 繪圖指南
-├── scripts/
-│   └── ws-server.ts       # WebSocket Server
-└── contexts/              # React Context
+app/                  # Next.js App Router
+  api/chat/           # Chat API endpoint with AI tools
+  page.tsx            # Main page with DrawIO embed
+components/           # React components
+  chat-panel.tsx      # Chat interface with diagram control
+  chat-input.tsx      # User input component with file upload
+  history-dialog.tsx  # Diagram version history viewer
+  ui/                 # UI components (buttons, cards, etc.)
+contexts/             # React context providers
+  diagram-context.tsx # Global diagram state management
+lib/                  # Utility functions and helpers
+  ai-providers.ts     # Multi-provider AI configuration
+  utils.ts            # XML processing and conversion utilities
+public/               # Static assets including example images
 ```
 
----
+## Support & Contact
 
-## 🔧 可用腳本
+If you find this project useful, please consider [sponsoring](https://github.com/sponsors/DayuanJiang) to help me host the live demo site!
 
-| 指令 | 說明 |
-|------|------|
-| `npm run dev` | 啟動 Next.js 開發伺服器 (port 6002) |
-| `npm run dev:ws` | 啟動 WebSocket Server (port 6004) |
-| `npm run dev:all` | 同時啟動 Next.js 和 WebSocket |
-| `npm run build` | 建置生產版本 |
-| `npm run start` | 啟動生產伺服器 (port 6001) |
+For support or inquiries, please open an issue on the GitHub repository or contact the maintainer at:
 
----
+-   Email: me[at]jiang.jp
 
-## 🛡️ 安全性考量
+## Star History
 
-### 本地開發
-- 預設使用 HTTP
-- 無需額外設定
-
-### 生產部署
-- 建議使用 Nginx/Caddy 作為反向代理
-- 強制 HTTPS
-- 設定 Access Code 存取控制
-- 環境變數不要提交到版本控制
+[![Star History Chart](https://api.star-history.com/svg?repos=DayuanJiang/next-ai-draw-io&type=date&legend=top-left)](https://www.star-history.com/#DayuanJiang/next-ai-draw-io&type=date&legend=top-left)
 
 ---
-
-## 📜 授權
-
-本專案採用 [Apache License 2.0](LICENSE) 授權。
-
-### 致謝
-
-- 原作者：[Dayuan Jiang](https://github.com/DayuanJiang)
-- 原專案：[next-ai-draw-io](https://github.com/DayuanJiang/next-ai-draw-io)
-
----
-
-## 🗺️ 發展路線圖
-
-詳見 [ROADMAP.md](ROADMAP.md)
-
-### 近期規劃
-- [ ] 繪圖偏好 Preset 系統
-- [ ] DDD 架構重構
-- [ ] 企業級安全強化
-- [ ] 研究圖表樣板
-
----
-
-## 🤝 貢獻
-
-歡迎提交 Issue 和 Pull Request！
-
-1. Fork 此專案
-2. 創建功能分支 (`git checkout -b feature/amazing-feature`)
-3. 提交變更 (`git commit -m '新增某功能'`)
-4. 推送到分支 (`git push origin feature/amazing-feature`)
-5. 開啟 Pull Request

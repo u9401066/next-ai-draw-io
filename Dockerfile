@@ -1,47 +1,56 @@
-# Next.js 前端 + WebSocket Server
-FROM node:22-alpine AS base
+# Multi-stage Dockerfile for Next.js
+# Fork version: node:22 + port 6002
 
-# 安裝依賴
-FROM base AS deps
+# Stage 1: Install dependencies
+FROM node:22-alpine AS deps
 RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
+# Copy package files
 COPY package.json package-lock.json* ./
+
+# Install dependencies
 RUN npm ci
 
-# 建構階段
-FROM base AS builder
+# Stage 2: Build application
+FROM node:22-alpine AS builder
 WORKDIR /app
+
+# Copy node_modules from deps stage
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# 環境變數
+# Disable Next.js telemetry during build
 ENV NEXT_TELEMETRY_DISABLED=1
-ENV NODE_ENV=production
 
+# Build Next.js application (standalone mode)
 RUN npm run build
 
-# 執行階段
-FROM base AS runner
+# Stage 3: Production runtime
+FROM node:22-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
+# Create non-root user for security
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
 
+# Copy necessary files
 COPY --from=builder /app/public ./public
-COPY --from=builder /app/.next/standalone ./
-COPY --from=builder /app/.next/static ./.next/static
-COPY --from=builder /app/scripts ./scripts
-COPY --from=builder /app/node_modules ./node_modules
+
+# Copy standalone build output
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
 USER nextjs
 
+# Fork uses port 6002 (dev environment consistency)
 EXPOSE 6002
 
 ENV PORT=6002
 ENV HOSTNAME="0.0.0.0"
 
+# Start the application
 CMD ["node", "server.js"]

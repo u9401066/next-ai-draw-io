@@ -1,5 +1,8 @@
-"use client";
+"use client"
 
+import Image from "next/image"
+import { useState } from "react"
+import { Button } from "@/components/ui/button"
 import {
     Dialog,
     DialogContent,
@@ -7,21 +10,33 @@ import {
     DialogFooter,
     DialogHeader,
     DialogTitle,
-} from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
-import Image from "next/image";
-import { useDiagram } from "@/contexts/diagram-context";
+} from "@/components/ui/dialog"
+import { useDiagram } from "@/contexts/diagram-context"
 
 interface HistoryDialogProps {
-    showHistory: boolean;
-    onToggleHistory: (show: boolean) => void;
+    showHistory: boolean
+    onToggleHistory: (show: boolean) => void
 }
 
 export function HistoryDialog({
     showHistory,
     onToggleHistory,
 }: HistoryDialogProps) {
-    const { loadDiagram: onDisplayChart, diagramHistory } = useDiagram();
+    const { loadDiagram: onDisplayChart, diagramHistory } = useDiagram()
+    const [selectedIndex, setSelectedIndex] = useState<number | null>(null)
+
+    const handleClose = () => {
+        setSelectedIndex(null)
+        onToggleHistory(false)
+    }
+
+    const handleConfirmRestore = () => {
+        if (selectedIndex !== null) {
+            // Skip validation for trusted history snapshots
+            onDisplayChart(diagramHistory[selectedIndex].xml, true)
+            handleClose()
+        }
+    }
 
     return (
         <Dialog open={showHistory} onOpenChange={onToggleHistory}>
@@ -45,11 +60,12 @@ export function HistoryDialog({
                         {diagramHistory.map((item, index) => (
                             <div
                                 key={index}
-                                className="border rounded-md p-2 cursor-pointer hover:border-primary transition-colors"
-                                onClick={() => {
-                                    onDisplayChart(item.xml);
-                                    onToggleHistory(false);
-                                }}
+                                className={`border rounded-md p-2 cursor-pointer hover:border-primary transition-colors ${
+                                    selectedIndex === index
+                                        ? "border-primary ring-2 ring-primary"
+                                        : ""
+                                }`}
+                                onClick={() => setSelectedIndex(index)}
                             >
                                 <div className="aspect-video bg-white rounded overflow-hidden flex items-center justify-center">
                                     <Image
@@ -69,14 +85,28 @@ export function HistoryDialog({
                 )}
 
                 <DialogFooter>
-                    <Button
-                        variant="outline"
-                        onClick={() => onToggleHistory(false)}
-                    >
-                        Close
-                    </Button>
+                    {selectedIndex !== null ? (
+                        <>
+                            <div className="flex-1 text-sm text-muted-foreground">
+                                Restore to Version {selectedIndex + 1}?
+                            </div>
+                            <Button
+                                variant="outline"
+                                onClick={() => setSelectedIndex(null)}
+                            >
+                                Cancel
+                            </Button>
+                            <Button onClick={handleConfirmRestore}>
+                                Confirm
+                            </Button>
+                        </>
+                    ) : (
+                        <Button variant="outline" onClick={handleClose}>
+                            Close
+                        </Button>
+                    )}
                 </DialogFooter>
             </DialogContent>
         </Dialog>
-    );
+    )
 }
