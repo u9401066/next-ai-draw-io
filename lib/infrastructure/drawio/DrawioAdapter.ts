@@ -14,4 +14,4 @@ export interface DrawioAdapterInterface {
  * DrawioAdapter 的實作會在 React 元件中使用 drawioRef 實現
  * 這裡只定義介面
  */
-export { DrawioAdapterInterface as DrawioAdapter };
+export type { DrawioAdapterInterface as DrawioAdapter };

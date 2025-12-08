@@ -6,5 +6,4 @@
 
 export { Checkpoint } from './Checkpoint';
 export { CheckpointManager } from './CheckpointManager';
-export { CheckpointSource, CheckpointId, CheckpointProps } from './types';
-export type { CheckpointSource as CheckpointSourceType } from './types';
+export type { CheckpointSource, CheckpointId, CheckpointProps } from './types';
