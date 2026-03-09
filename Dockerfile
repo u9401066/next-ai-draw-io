@@ -1,8 +1,8 @@
 # Multi-stage Dockerfile for Next.js
-# Fork version: node:22 + port 6002
+# Fork version: node:24 + port 6002
 
 # Stage 1: Install dependencies
-FROM node:22-alpine AS deps
+FROM node:24-alpine AS deps
 RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
@@ -10,10 +10,11 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 
 # Install dependencies
-RUN npm ci
+ARG ELECTRON_SKIP_BINARY_DOWNLOAD=1
+RUN npm install
 
 # Stage 2: Build application
-FROM node:22-alpine AS builder
+FROM node:24-alpine AS builder
 WORKDIR /app
 
 # Copy node_modules from deps stage
@@ -23,11 +24,28 @@ COPY . .
 # Disable Next.js telemetry during build
 ENV NEXT_TELEMETRY_DISABLED=1
 
+# Build-time argument for self-hosted draw.io URL
+ARG NEXT_PUBLIC_DRAWIO_BASE_URL=https://embed.diagrams.net
+ENV NEXT_PUBLIC_DRAWIO_BASE_URL=${NEXT_PUBLIC_DRAWIO_BASE_URL}
+
+# Build-time argument to show About link and Notice icon
+ARG NEXT_PUBLIC_SHOW_ABOUT_AND_NOTICE=false
+ENV NEXT_PUBLIC_SHOW_ABOUT_AND_NOTICE=${NEXT_PUBLIC_SHOW_ABOUT_AND_NOTICE}
+
+# Build-time argument for subdirectory deployment (e.g., /nextaidrawio)
+ARG NEXT_PUBLIC_BASE_PATH=""
+ENV NEXT_PUBLIC_BASE_PATH=${NEXT_PUBLIC_BASE_PATH}
+
+# Control sponsorship and self-hosting messaging in quota notifications.
+# Set NEXT_PUBLIC_SELFHOSTED="true" in self-hosted deployments to hide sponsorship/self-host links and related text in quota popups.
+ARG NEXT_PUBLIC_SELFHOSTED=""
+ENV NEXT_PUBLIC_SELFHOSTED="${NEXT_PUBLIC_SELFHOSTED}"
+
 # Build Next.js application (standalone mode)
 RUN npm run build
 
 # Stage 3: Production runtime
-FROM node:22-alpine AS runner
+FROM node:24-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
@@ -52,5 +70,5 @@ EXPOSE 6002
 ENV PORT=6002
 ENV HOSTNAME="0.0.0.0"
 
-# Start the application
-CMD ["node", "server.js"]
+# Start the application (HOSTNAME override needed for AWS App Runner)
+CMD ["sh", "-c", "HOSTNAME=0.0.0.0 exec node server.js"]
