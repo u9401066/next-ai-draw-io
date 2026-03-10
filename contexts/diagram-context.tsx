@@ -1,80 +1,42 @@
 "use client"
 
 import type React from "react"
-import {
-    createContext,
-    useCallback,
-    useContext,
-    useEffect,
-    useRef,
-    useState,
-} from "react"
+import { createContext, useContext, useEffect, useRef, useState } from "react"
 import type { DrawIoEmbedRef } from "react-drawio"
-import { DiagramDiffTracker } from "../lib/diagram-diff-tracker"
+import { toast } from "sonner"
+import type { ExportFormat } from "@/components/save-dialog"
+import { getApiEndpoint } from "@/lib/base-path"
 import {
-    type ApplyResult,
-    type DiagramOperation,
-    DiagramOperationsHandler,
-} from "../lib/diagram-operations-handler"
-// DDD Checkpoint Integration
-import {
-    type Checkpoint,
-    CheckpointManager,
-    type CheckpointSource,
-} from "../lib/domain/checkpoint"
-import { extractDiagramXML } from "../lib/utils"
-import type {
-    DiagramUpdateMessage,
-    HumanChanges,
-    PendingOperationsMessage,
-} from "../lib/websocket/types"
-import { useWebSocket } from "../lib/websocket/useWebSocket"
-
-// WebSocket 設定
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:6003"
-const USE_WEBSOCKET = process.env.NEXT_PUBLIC_USE_WEBSOCKET !== "false" // 預設啟用
+    extractDiagramXML,
+    isRealDiagram,
+    validateAndFixXml,
+} from "../lib/utils"
 
 interface DiagramContextType {
     chartXML: string
     latestSvg: string
     diagramHistory: { svg: string; xml: string }[]
-    loadDiagram: (chart: string, skipValidation?: boolean) => void
+    setDiagramHistory: (history: { svg: string; xml: string }[]) => void
+    loadDiagram: (chart: string, skipValidation?: boolean) => string | null
     handleExport: () => void
+    handleExportWithoutHistory: () => void
     resolverRef: React.Ref<((value: string) => void) | null>
     drawioRef: React.Ref<DrawIoEmbedRef | null>
     handleDiagramExport: (data: any) => void
     clearDiagram: () => void
-    // 新增: Diff 相關功能
-    getHumanChanges: () => ReturnType<
-        DiagramOperationsHandler["getHumanChanges"]
-    >
-    applyOperations: (
-        ops: DiagramOperation[],
-        preserveUserChanges?: boolean,
-    ) => ApplyResult
-    getElements: (
-        type?: "nodes" | "edges",
-    ) => ReturnType<DiagramOperationsHandler["getElements"]>
-    syncState: () => ReturnType<DiagramOperationsHandler["syncState"]>
-    setBaseState: () => void
-    // WebSocket 狀態
-    isWsConnected: boolean
-    // DDD Checkpoint 功能
-    saveCheckpoint: (
-        source: CheckpointSource,
-        description?: string,
-    ) => Checkpoint | null
-    undoCheckpoint: () => Checkpoint | null
-    redoCheckpoint: () => Checkpoint | null
-    canUndo: boolean
-    canRedo: boolean
-    checkpointCount: number
-    checkpointList: Checkpoint[]
     saveDiagramToFile: (
         filename: string,
-        format: string,
+        format: ExportFormat,
         sessionId?: string,
+        successMessage?: string,
     ) => void
+    getThumbnailSvg: () => Promise<string | null>
+    captureValidationPng: () => Promise<string | null>
+    isDrawioReady: boolean
+    onDrawioLoad: () => void
+    resetDrawioReady: () => void
+    showSaveDialog: boolean
+    setShowSaveDialog: (show: boolean) => void
 }
 
 const DiagramContext = createContext<DiagramContextType | undefined>(undefined)
@@ -85,472 +47,336 @@ export function DiagramProvider({ children }: { children: React.ReactNode }) {
     const [diagramHistory, setDiagramHistory] = useState<
         { svg: string; xml: string }[]
     >([])
-    const [activeTabId, setActiveTabId] = useState<string | null>(null)
+    const [isDrawioReady, setIsDrawioReady] = useState(false)
+    const [showSaveDialog, setShowSaveDialog] = useState(false)
+    const hasCalledOnLoadRef = useRef(false)
     const drawioRef = useRef<DrawIoEmbedRef | null>(null)
     const resolverRef = useRef<((value: string) => void) | null>(null)
+    // Resolver for PNG export (used for VLM validation)
+    const pngResolverRef = useRef<((value: string) => void) | null>(null)
+    // Track if we're expecting an export for history (user-initiated)
+    const expectHistoryExportRef = useRef<boolean>(false)
+    // Track if diagram has been restored after DrawIO remount (e.g., theme change)
+    const hasDiagramRestoredRef = useRef<boolean>(false)
+    // Track latest chartXML for restoration after remount
+    const chartXMLRef = useRef<string>("")
 
-    // Diff 追蹤相關
-    const opsHandlerRef = useRef<DiagramOperationsHandler>(
-        new DiagramOperationsHandler(),
-    )
+    const onDrawioLoad = () => {
+        // Only set ready state once to prevent infinite loops
+        if (hasCalledOnLoadRef.current) return
+        hasCalledOnLoadRef.current = true
+        setIsDrawioReady(true)
+    }
 
-    // DDD Checkpoint Manager
-    const checkpointManagerRef = useRef<CheckpointManager>(
-        new CheckpointManager(50),
-    )
-    const [canUndo, setCanUndo] = useState(false)
-    const [canRedo, setCanRedo] = useState(false)
-    const [checkpointCount, setCheckpointCount] = useState(0)
-    const [checkpointList, setCheckpointList] = useState<Checkpoint[]>([])
-    const currentDiagramId = activeTabId || "default"
+    const resetDrawioReady = () => {
+        hasCalledOnLoadRef.current = false
+        setIsDrawioReady(false)
+    }
 
-    // Pending Save State
-    const pendingSaveRef = useRef<{
-        filename: string
-        format: string
-        sessionId?: string
-    } | null>(null)
+    // Keep chartXMLRef in sync with state for restoration after remount
+    useEffect(() => {
+        chartXMLRef.current = chartXML
+    }, [chartXML])
 
-    const saveDiagramToFile = useCallback(
-        (filename: string, format: string, sessionId?: string) => {
-            pendingSaveRef.current = { filename, format, sessionId }
-            if (drawioRef.current) {
-                drawioRef.current.exportDiagram({
-                    format: "xmlsvg",
-                })
-            }
-        },
-        [],
-    )
+    // Restore diagram when DrawIO becomes ready after remount (e.g., theme/UI change)
+    useEffect(() => {
+        // Reset restore flag when DrawIO is not ready (preparing for next restore cycle)
+        if (!isDrawioReady) {
+            hasDiagramRestoredRef.current = false
+            return
+        }
+        // Only restore once per ready cycle
+        if (hasDiagramRestoredRef.current) return
+        hasDiagramRestoredRef.current = true
+
+        // Restore diagram from ref if we have one
+        const xmlToRestore = chartXMLRef.current
+        if (isRealDiagram(xmlToRestore) && drawioRef.current) {
+            drawioRef.current.load({ xml: xmlToRestore })
+        }
+    }, [isDrawioReady])
+
+    // Track if we're expecting an export for file save (stores raw export data)
+    const saveResolverRef = useRef<{
+        resolver: ((data: string) => void) | null
+        format: ExportFormat | null
+    }>({ resolver: null, format: null })
 
     const handleExport = () => {
         if (drawioRef.current) {
+            // Mark that this export should be saved to history
+            expectHistoryExportRef.current = true
             drawioRef.current.exportDiagram({
                 format: "xmlsvg",
             })
         }
     }
 
-    const loadDiagram = (chart: string, skipValidation?: boolean) => {
+    const handleExportWithoutHistory = () => {
         if (drawioRef.current) {
-            drawioRef.current.load({
-                xml: chart,
+            // Export without saving to history (for edit_diagram fetching current state)
+            drawioRef.current.exportDiagram({
+                format: "xmlsvg",
             })
         }
     }
 
-    const handleDiagramExport = (data: any) => {
-        console.log("[DiagramContext] handleDiagramExport called with data:", {
-            format: data.format,
-            dataType: typeof data.data,
-            dataPrefix: data.data?.substring?.(0, 100),
-            message: data.message,
-        })
+    // Get current diagram as SVG for thumbnail (used by session storage)
+    const getThumbnailSvg = async (): Promise<string | null> => {
+        if (!drawioRef.current) return null
+        // Don't export if diagram is empty
+        if (!isRealDiagram(chartXML)) return null
 
-        // Log debug info to server for easier debugging
-        fetch("/api/mcp", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                action: "debug_log",
-                message: "handleDiagramExport called",
-                dataType: typeof data.data,
-                dataPrefix: data.data?.substring?.(0, 100),
-                format: data.format,
-            }),
-        }).catch(() => {})
+        try {
+            const svgData = await Promise.race([
+                new Promise<string>((resolve) => {
+                    resolverRef.current = resolve
+                    drawioRef.current?.exportDiagram({ format: "xmlsvg" })
+                }),
+                new Promise<string>((_, reject) =>
+                    setTimeout(() => reject(new Error("Export timeout")), 3000),
+                ),
+            ])
 
-        // Handle Pending Save (File Download)
-        if (pendingSaveRef.current) {
-            const { filename, format, sessionId } = pendingSaveRef.current
-            try {
-                let content = data.data
-                let finalFilename = filename
-                let mimeType = "text/plain"
+            // Update latestSvg so it's available for future saves
+            if (svgData?.includes("<svg")) {
+                setLatestSvg(svgData)
+                return svgData
+            }
+            return null
+        } catch {
+            // Timeout is expected occasionally - don't log as error
+            return null
+        }
+    }
 
-                // Process content based on format
-                if (format === "drawio" || format === "xml") {
-                    const xml = extractDiagramXML(data.data)
-                    if (xml) content = xml
-                    mimeType = "text/xml"
-                    if (!finalFilename.endsWith(".drawio"))
-                        finalFilename += ".drawio"
-                } else if (format === "svg") {
-                    mimeType = "image/svg+xml"
-                    if (!finalFilename.endsWith(".svg")) finalFilename += ".svg"
-                }
+    // Capture current diagram as PNG for VLM validation
+    const captureValidationPng = async (): Promise<string | null> => {
+        if (!drawioRef.current) return null
+        // Don't export if diagram is empty
+        if (!isRealDiagram(chartXML)) return null
 
-                // Create download
-                let href = ""
-                if (
-                    typeof content === "string" &&
-                    content.startsWith("data:")
-                ) {
-                    href = content
-                } else {
-                    const blob = new Blob([content], { type: mimeType })
-                    href = URL.createObjectURL(blob)
-                }
+        try {
+            const pngData = await Promise.race([
+                new Promise<string>((resolve) => {
+                    pngResolverRef.current = resolve
+                    drawioRef.current?.exportDiagram({ format: "png" })
+                }),
+                new Promise<string>((_, reject) =>
+                    setTimeout(
+                        () => reject(new Error("PNG export timeout")),
+                        5000,
+                    ),
+                ),
+            ])
 
-                const link = document.createElement("a")
-                link.href = href
-                link.download = finalFilename
-                document.body.appendChild(link)
-                link.click()
-                document.body.removeChild(link)
-                if (!content.startsWith("data:")) {
-                    URL.revokeObjectURL(href)
-                }
+            // PNG data should be a base64 data URL
+            if (pngData?.startsWith("data:image/png")) {
+                return pngData
+            }
+            return null
+        } catch {
+            // Timeout is expected occasionally - don't log as error
+            return null
+        }
+    }
 
-                // Log to API
-                fetch("/api/log-save", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        filename: finalFilename,
-                        format,
-                        sessionId,
-                    }),
-                }).catch(console.error)
-            } catch (e) {
-                console.error("Failed to save diagram to file", e)
-            } finally {
-                pendingSaveRef.current = null
+    const loadDiagram = (
+        chart: string,
+        skipValidation?: boolean,
+    ): string | null => {
+        let xmlToLoad = chart
+
+        // Validate XML structure before loading (unless skipped for internal use)
+        if (!skipValidation) {
+            const validation = validateAndFixXml(chart)
+            if (!validation.valid) {
+                console.warn(
+                    "[loadDiagram] Validation error:",
+                    validation.error,
+                )
+                return validation.error
+            }
+            // Use fixed XML if auto-fix was applied
+            if (validation.fixed) {
+                console.log(
+                    "[loadDiagram] Auto-fixed XML issues:",
+                    validation.fixes,
+                )
+                xmlToLoad = validation.fixed
             }
         }
 
-        try {
-            const extractedXML = extractDiagramXML(data.data)
-            if (extractedXML) {
-                setChartXML(extractedXML)
-                setLatestSvg(data.data)
-                setDiagramHistory((prev) => [
+        // Keep chartXML in sync even when diagrams are injected (e.g., display_diagram tool)
+        setChartXML(xmlToLoad)
+
+        if (drawioRef.current) {
+            drawioRef.current.load({
+                xml: xmlToLoad,
+            })
+        }
+
+        return null
+    }
+
+    const handleDiagramExport = (data: any) => {
+        // Handle PNG export for VLM validation
+        if (pngResolverRef.current && data.data?.startsWith("data:image/png")) {
+            pngResolverRef.current(data.data)
+            pngResolverRef.current = null
+            return
+        }
+
+        // Handle save to file if requested (process raw data before extraction)
+        if (saveResolverRef.current.resolver) {
+            const format = saveResolverRef.current.format
+            saveResolverRef.current.resolver(data.data)
+            saveResolverRef.current = { resolver: null, format: null }
+            // For non-xmlsvg formats, skip XML extraction as it will fail
+            // Only drawio (which uses xmlsvg internally) has the content attribute
+            if (format === "png" || format === "svg") {
+                return
+            }
+        }
+
+        const extractedXML = extractDiagramXML(data.data)
+        setChartXML(extractedXML)
+        setLatestSvg(data.data)
+
+        // Only add to history if this was a user-initiated export
+        // Limit to 20 entries to prevent memory leaks during long sessions
+        const MAX_HISTORY_SIZE = 20
+        if (expectHistoryExportRef.current) {
+            setDiagramHistory((prev) => {
+                const newHistory = [
                     ...prev,
                     {
                         svg: data.data,
                         xml: extractedXML,
                     },
-                ])
-                // 更新 diff tracker
-                opsHandlerRef.current.updateXml(extractedXML)
+                ]
+                // Keep only the last MAX_HISTORY_SIZE entries (circular buffer)
+                return newHistory.slice(-MAX_HISTORY_SIZE)
+            })
+            expectHistoryExportRef.current = false
+        }
 
-                if (resolverRef.current) {
-                    resolverRef.current(extractedXML)
-                    resolverRef.current = null
-                }
-            }
-        } catch (error) {
-            console.error("handleDiagramExport: Failed to extract XML", error)
-            // Log error to server
-            fetch("/api/mcp", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    action: "debug_log",
-                    message: "extractDiagramXML FAILED",
-                    error: String(error),
-                    dataPrefix: data.data?.substring?.(0, 200),
-                }),
-            }).catch(() => {})
-            // Still store the raw data even if extraction fails
-            setLatestSvg(data.data)
+        if (resolverRef.current) {
+            resolverRef.current(extractedXML)
+            resolverRef.current = null
         }
     }
 
     const clearDiagram = () => {
         const emptyDiagram = `<mxfile><diagram name="Page-1" id="page-1"><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/></root></mxGraphModel></diagram></mxfile>`
-        loadDiagram(emptyDiagram)
-        setChartXML(emptyDiagram)
+        // Skip validation for trusted internal template (loadDiagram also sets chartXML)
+        loadDiagram(emptyDiagram, true)
         setLatestSvg("")
         setDiagramHistory([])
-        opsHandlerRef.current.setCurrentXml(emptyDiagram)
     }
 
-    // === Diff 相關函數 ===
-
-    // 取得用戶變更
-    const getHumanChanges = useCallback(() => {
-        return opsHandlerRef.current.getHumanChanges()
-    }, [])
-
-    // 應用操作
-    const applyOperations = useCallback(
-        (ops: DiagramOperation[], preserveUserChanges: boolean = true) => {
-            const result = opsHandlerRef.current.applyOperations(
-                ops,
-                preserveUserChanges,
-            )
-            if (result.success && result.newXml) {
-                // 載入新的 XML 到 Draw.io
-                loadDiagram(result.newXml)
-                setChartXML(result.newXml)
-            }
-            return result
-        },
-        [],
-    )
-
-    // 取得元素列表
-    const getElements = useCallback((type?: "nodes" | "edges") => {
-        return opsHandlerRef.current.getElements(type)
-    }, [])
-
-    // 同步狀態
-    const syncState = useCallback(() => {
-        return opsHandlerRef.current.syncState()
-    }, [])
-
-    // 設定基準狀態（Agent 完成操作後呼叫）
-    const setBaseState = useCallback(() => {
-        opsHandlerRef.current.setCurrentXml(chartXML)
-    }, [chartXML])
-
-    // === DDD Checkpoint 相關函數 ===
-
-    // 更新 checkpoint 狀態的輔助函數
-    const updateCheckpointState = useCallback(() => {
-        const manager = checkpointManagerRef.current
-        setCanUndo(manager.canUndo(currentDiagramId))
-        setCanRedo(manager.canRedo(currentDiagramId))
-        setCheckpointCount(manager.count(currentDiagramId))
-        setCheckpointList(manager.list(currentDiagramId))
-    }, [currentDiagramId])
-
-    // 儲存檢查點
-    const saveCheckpoint = useCallback(
-        (source: CheckpointSource, description?: string): Checkpoint | null => {
-            if (!chartXML) return null
-
-            const checkpoint = checkpointManagerRef.current.save(
-                currentDiagramId,
-                chartXML,
-                latestSvg,
-                source,
-                description,
-            )
-            updateCheckpointState()
-            console.log(
-                "[DiagramContext] Checkpoint saved:",
-                checkpoint.id.value,
-                source,
-            )
-            return checkpoint
-        },
-        [chartXML, latestSvg, currentDiagramId, updateCheckpointState],
-    )
-
-    // Undo - 回到上一個檢查點
-    const undoCheckpoint = useCallback((): Checkpoint | null => {
-        const checkpoint = checkpointManagerRef.current.undo(currentDiagramId)
-        if (checkpoint) {
-            loadDiagram(checkpoint.xml)
-            setChartXML(checkpoint.xml)
-            setLatestSvg(checkpoint.svg)
-            updateCheckpointState()
-            console.log(
-                "[DiagramContext] Undo to checkpoint:",
-                checkpoint.id.value,
-            )
-        }
-        return checkpoint
-    }, [currentDiagramId, updateCheckpointState])
-
-    // Redo - 前進到下一個檢查點
-    const redoCheckpoint = useCallback((): Checkpoint | null => {
-        const checkpoint = checkpointManagerRef.current.redo(currentDiagramId)
-        if (checkpoint) {
-            loadDiagram(checkpoint.xml)
-            setChartXML(checkpoint.xml)
-            setLatestSvg(checkpoint.svg)
-            updateCheckpointState()
-            console.log(
-                "[DiagramContext] Redo to checkpoint:",
-                checkpoint.id.value,
-            )
-        }
-        return checkpoint
-    }, [currentDiagramId, updateCheckpointState])
-
-    // === WebSocket 處理 ===
-
-    // 用 ref 保存 sendOperationResult 避免循環依賴
-    const sendOperationResultRef = useRef<typeof sendOperationResult | null>(
-        null,
-    )
-
-    // 處理圖表更新訊息
-    const handleDiagramUpdateWS = useCallback(
-        (payload: DiagramUpdateMessage["payload"]) => {
-            console.log(
-                "[DiagramContext WS] Diagram update received:",
-                payload.action,
-            )
-            loadDiagram(payload.xml)
-            setChartXML(payload.xml)
-            setActiveTabId(payload.tabId)
-        },
-        [],
-    )
-
-    // 處理待執行操作訊息
-    const handlePendingOperationsWS = useCallback(
-        (payload: PendingOperationsMessage["payload"]) => {
-            console.log(
-                "[DiagramContext WS] Pending operations received:",
-                payload.operations,
-            )
-
-            const result = applyOperations(
-                payload.operations,
-                payload.preserveUserChanges,
-            )
-
-            // 透過 WebSocket 回報結果（使用 ref 避免循環依賴）
-            sendOperationResultRef.current?.(
-                payload.requestId,
-                result.success,
-                result.applied,
-                result.conflicts,
-                result.newXml,
-            )
-        },
-        [applyOperations],
-    )
-
-    // WebSocket 連線（條件啟用）
-    const {
-        isConnected: isWsConnected,
-        clientId: wsClientId,
-        sendChangesReport,
-        sendOperationResult,
-        subscribe,
-    } = useWebSocket({
-        url: USE_WEBSOCKET ? WS_URL : "", // 空 URL 時 hook 不會連線
-        onDiagramUpdate: handleDiagramUpdateWS,
-        onPendingOperations: handlePendingOperationsWS,
-        onConnected: (clientId) => {
-            console.log("[DiagramContext] WebSocket connected:", clientId)
-            // 訂閱當前 tab
-            if (activeTabId) {
-                subscribe(activeTabId)
-            }
-        },
-        onDisconnected: () => {
-            console.log("[DiagramContext] WebSocket disconnected")
-        },
-    })
-
-    // 更新 ref
-    useEffect(() => {
-        sendOperationResultRef.current = sendOperationResult
-    }, [sendOperationResult])
-
-    // 當 tab 變更時重新訂閱
-    useEffect(() => {
-        if (isWsConnected && activeTabId) {
-            subscribe(activeTabId)
-        }
-    }, [isWsConnected, activeTabId, subscribe])
-
-    // === Fallback: 輪詢處理（僅在 WebSocket 未連線時使用）===
-
-    // 檢查並執行待處理操作
-    const checkAndApplyPendingOperations = useCallback(async () => {
-        // 如果 WebSocket 已連線，不使用 polling
-        if (isWsConnected) return
-
-        try {
-            const response = await fetch("/api/mcp?action=check_pending_ops")
-            const data = await response.json()
-
-            if (data.hasPending && data.operations) {
-                console.log(
-                    "[DiagramContext Polling] Applying pending operations:",
-                    data.operations,
-                )
-
-                const result = applyOperations(
-                    data.operations,
-                    data.preserveUserChanges ?? true,
-                )
-
-                // 回報結果
-                await fetch("/api/mcp", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        action: "operation_result",
-                        requestId: data.requestId,
-                        result: {
-                            success: result.success,
-                            applied: result.applied,
-                            conflicts: result.conflicts,
-                        },
-                        newXml: result.newXml,
-                    }),
-                })
-            }
-        } catch (error) {
-            console.error(
-                "[DiagramContext Polling] Error checking pending operations:",
-                error,
-            )
-        }
-    }, [applyOperations, isWsConnected])
-
-    // 回報用戶變更
-    const reportChangesToServer = useCallback(async () => {
-        if (!chartXML) return
-
-        const changes = getHumanChanges()
-
-        // 優先使用 WebSocket
-        if (isWsConnected && activeTabId) {
-            sendChangesReport(activeTabId, changes as HumanChanges)
+    const saveDiagramToFile = (
+        filename: string,
+        format: ExportFormat,
+        sessionId?: string,
+        successMessage?: string,
+    ) => {
+        if (!drawioRef.current) {
+            console.warn("Draw.io editor not ready")
             return
         }
 
-        // Fallback 到 HTTP
+        // Map format to draw.io export format
+        const drawioFormat = format === "drawio" ? "xmlsvg" : format
+
+        // Set up the resolver before triggering export
+        saveResolverRef.current = {
+            resolver: (exportData: string) => {
+                let fileContent: string | Blob
+                let mimeType: string
+                let extension: string
+
+                if (format === "drawio") {
+                    // Extract XML from SVG for .drawio format
+                    const xml = extractDiagramXML(exportData)
+                    let xmlContent = xml
+                    if (!xml.includes("<mxfile")) {
+                        xmlContent = `<mxfile><diagram name="Page-1" id="page-1">${xml}</diagram></mxfile>`
+                    }
+                    fileContent = xmlContent
+                    mimeType = "application/xml"
+                    extension = ".drawio"
+                } else if (format === "png") {
+                    // PNG data comes as base64 data URL
+                    fileContent = exportData
+                    mimeType = "image/png"
+                    extension = ".png"
+                } else {
+                    // SVG format
+                    fileContent = exportData
+                    mimeType = "image/svg+xml"
+                    extension = ".svg"
+                }
+
+                // Log save event to Langfuse (flags the trace)
+                logSaveToLangfuse(filename, format, sessionId)
+
+                // Handle download
+                let url: string
+                if (
+                    typeof fileContent === "string" &&
+                    fileContent.startsWith("data:")
+                ) {
+                    // Already a data URL (PNG)
+                    url = fileContent
+                } else {
+                    const blob = new Blob([fileContent], { type: mimeType })
+                    url = URL.createObjectURL(blob)
+                }
+
+                const a = document.createElement("a")
+                a.href = url
+                a.download = `${filename}${extension}`
+                document.body.appendChild(a)
+                a.click()
+                document.body.removeChild(a)
+
+                // Show success toast after download is initiated
+                if (successMessage) {
+                    toast.success(successMessage, {
+                        position: "bottom-left",
+                        duration: 2500,
+                    })
+                }
+
+                // Delay URL revocation to ensure download completes
+                if (!url.startsWith("data:")) {
+                    setTimeout(() => URL.revokeObjectURL(url), 100)
+                }
+            },
+            format,
+        }
+
+        // Export diagram - callback will be handled in handleDiagramExport
+        drawioRef.current.exportDiagram({ format: drawioFormat })
+    }
+
+    // Log save event to Langfuse (just flags the trace, doesn't send content)
+    const logSaveToLangfuse = async (
+        filename: string,
+        format: string,
+        sessionId?: string,
+    ) => {
         try {
-            await fetch("/api/mcp", {
+            await fetch(getApiEndpoint("/api/log-save"), {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    action: "report_changes",
-                    changes: changes,
-                }),
+                body: JSON.stringify({ filename, format, sessionId }),
             })
         } catch (error) {
-            console.error(
-                "[DiagramContext Polling] Error reporting changes:",
-                error,
-            )
+            console.warn("Failed to log save to Langfuse:", error)
         }
-    }, [
-        chartXML,
-        getHumanChanges,
-        isWsConnected,
-        activeTabId,
-        sendChangesReport,
-    ])
-
-    // 設定輪詢 interval（僅作為 fallback）
-    useEffect(() => {
-        // 如果 WebSocket 已連線，使用更長的間隔或不啟用
-        const pollInterval = isWsConnected ? 10000 : 2000 // WS 連線時 10 秒，否則 2 秒
-        const changesInterval = isWsConnected ? 10000 : 3000 // WS 連線時 10 秒，否則 3 秒
-
-        const opsTimer = setInterval(
-            checkAndApplyPendingOperations,
-            pollInterval,
-        )
-        const changesTimer = setInterval(reportChangesToServer, changesInterval)
-
-        return () => {
-            clearInterval(opsTimer)
-            clearInterval(changesTimer)
-        }
-    }, [checkAndApplyPendingOperations, reportChangesToServer, isWsConnected])
+    }
 
     return (
         <DiagramContext.Provider
@@ -558,29 +384,22 @@ export function DiagramProvider({ children }: { children: React.ReactNode }) {
                 chartXML,
                 latestSvg,
                 diagramHistory,
+                setDiagramHistory,
                 loadDiagram,
                 handleExport,
+                handleExportWithoutHistory,
                 resolverRef,
                 drawioRef,
                 handleDiagramExport,
                 clearDiagram,
-                // Diff 相關
-                getHumanChanges,
-                applyOperations,
-                getElements,
-                syncState,
-                setBaseState,
-                // WebSocket 狀態
-                isWsConnected,
-                // DDD Checkpoint 功能
-                saveCheckpoint,
-                undoCheckpoint,
-                redoCheckpoint,
-                canUndo,
-                canRedo,
-                checkpointCount,
-                checkpointList,
                 saveDiagramToFile,
+                getThumbnailSvg,
+                captureValidationPng,
+                isDrawioReady,
+                onDrawioLoad,
+                resetDrawioReady,
+                showSaveDialog,
+                setShowSaveDialog,
             }}
         >
             {children}
