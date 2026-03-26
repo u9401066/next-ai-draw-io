@@ -30,12 +30,15 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import open from "open"
 import { z } from "zod"
+import { type DiagramOperation } from "./diagram-operations.js"
 import {
-    applyDiagramOperations,
-    type DiagramOperation,
-} from "./diagram-operations.js"
+    type DocSession,
+    type RevisionEvent,
+} from "./document-manager.js"
 import { addHistory } from "./history.js"
 import {
+    ensureStateForDocument,
+    getDocumentManager,
     getState,
     requestSync,
     setState,
@@ -51,13 +54,9 @@ const config = {
     port: parseInt(process.env.PORT || "6002", 10),
 }
 
-// Session state (single session for simplicity)
-let currentSession: {
-    id: string
-    xml: string
-    version: number
-    lastGetDiagramTime: number // Track when get_diagram was last called (for enforcing workflow)
-} | null = null
+const documentManager = getDocumentManager()
+const recentDocumentReads = new Map<string, number>()
+let activeDocumentId: string | null = null
 
 // Create MCP server
 const server = new McpServer({
@@ -65,7 +64,6 @@ const server = new McpServer({
     version: "0.1.2",
 })
 
-// Register prompt with workflow guidance
 server.prompt(
     "diagram-workflow",
     "Guidelines for creating and editing draw.io diagrams",
@@ -75,129 +73,463 @@ server.prompt(
                 role: "user",
                 content: {
                     type: "text",
-                    text: `# Draw.io Diagram Workflow Guidelines
+                    text: `# Draw.io Document Workflow
 
-## Creating a New Diagram
-1. Call start_session to open the browser preview
-2. Use create_new_diagram with complete mxGraphModel XML to create a new diagram
+## Preferred MVP flow
+1. Call open_document(path?) to open or create a document and launch browser preview
+2. Call get_document(docId) to fetch the latest XML and metadata
+3. Call apply_operations(docId, operations) to make agent edits
+4. Call get_human_changes(docId, sinceRevision) to detect manual browser edits
+5. Call save_document(docId) to persist to disk
 
-## Adding Elements to Existing Diagram
-1. Use edit_diagram with "add" operation
-2. Provide a unique cell_id and complete mxCell XML
-3. No need to call get_diagram first - the server fetches latest state automatically
-
-## Modifying or Deleting Existing Elements
-1. FIRST call get_diagram to see current cell IDs and structure
-2. THEN call edit_diagram with "update" or "delete" operations
-3. For update, provide the cell_id and complete new mxCell XML
-
-## Important Notes
-- create_new_diagram REPLACES the entire diagram - only use for new diagrams
-- edit_diagram PRESERVES user's manual changes (fetches browser state first)
-- Always use unique cell_ids when adding elements (e.g., "shape-1", "arrow-2")`,
+## Important notes
+- Use docId returned by open_document as the primary handle
+- get_document fetches the latest browser state before returning XML
+- apply_operations also syncs from the browser first to reduce overwriting human edits
+- save_document requires the document to already have a bound filePath
+- Legacy tools (start_session, get_diagram, edit_diagram, create_new_diagram) remain as compatibility wrappers`,
                 },
             },
         ],
     }),
 )
 
-// Tool: start_session
+function errorResult(message: string) {
+    return {
+        content: [{ type: "text" as const, text: `Error: ${message}` }],
+        isError: true,
+    }
+}
+
+function getDocumentOrThrow(docId: string): DocSession {
+    const document = documentManager.getDocument(docId)
+    if (!document) {
+        throw new Error(`Unknown document: ${docId}`)
+    }
+    return document
+}
+
+function rememberActiveDocument(docId: string, markRead = false): void {
+    activeDocumentId = docId
+    if (markRead) {
+        recentDocumentReads.set(docId, Date.now())
+    }
+}
+
+function requireActiveDocumentId(): string {
+    if (!activeDocumentId) {
+        throw new Error(
+            "No active document. Call open_document (or start_session) first.",
+        )
+    }
+    return activeDocumentId
+}
+
+function documentSummary(document: DocSession) {
+    return {
+        docId: document.docId,
+        filePath: document.filePath,
+        title: document.title,
+        currentRevision: document.currentRevision,
+        lastSavedRevision: document.lastSavedRevision,
+        dirty: document.dirty,
+        activeTabId: document.activeTabId,
+    }
+}
+
+function documentSummaryText(document: DocSession): string {
+    return [
+        `docId: ${document.docId}`,
+        `filePath: ${document.filePath ?? "(unsaved)"}`,
+        `title: ${document.title}`,
+        `currentRevision: ${document.currentRevision}`,
+        `lastSavedRevision: ${document.lastSavedRevision}`,
+        `dirty: ${document.dirty}`,
+        `activeTabId: ${document.activeTabId ?? "(none)"}`,
+    ].join("\n")
+}
+
+function documentResult(
+    heading: string,
+    document: DocSession,
+    options?: {
+        browserUrl?: string
+        includeXml?: boolean
+        extraText?: string[]
+        extraStructured?: Record<string, unknown>
+    },
+) {
+    const sections = [heading, "", documentSummaryText(document)]
+
+    if (options?.browserUrl) {
+        sections.push("", `browserUrl: ${options.browserUrl}`)
+    }
+
+    if (options?.extraText?.length) {
+        sections.push("", ...options.extraText)
+    }
+
+    if (options?.includeXml) {
+        sections.push("", "XML:", document.currentXml)
+    }
+
+    return {
+        content: [{ type: "text" as const, text: sections.join("\n") }],
+        structuredContent: {
+            ...documentSummary(document),
+            ...(options?.browserUrl ? { browserUrl: options.browserUrl } : {}),
+            ...(options?.includeXml ? { xml: document.currentXml } : {}),
+            ...(options?.extraStructured || {}),
+        },
+    }
+}
+
+async function openDocumentWorkflow(filePath?: string) {
+    const port = await startHttpServer(config.port)
+    const document = await documentManager.openDocument(filePath)
+    ensureStateForDocument(document)
+
+    const browserUrl = `http://localhost:${port}?docId=${document.docId}`
+    await open(browserUrl)
+
+    rememberActiveDocument(document.docId)
+    log.info(
+        `Opened document ${document.docId} (${document.filePath ?? "untitled"}), browser at ${browserUrl}`,
+    )
+
+    return { document, browserUrl }
+}
+
+async function syncDocumentFromBrowser(
+    docId: string,
+    source = "browser-sync",
+): Promise<DocSession> {
+    const initial = getDocumentOrThrow(docId)
+    ensureStateForDocument(initial)
+
+    const syncRequested = requestSync(docId)
+    if (syncRequested) {
+        const synced = await waitForSync(docId)
+        if (!synced) {
+            log.warn(`Sync timeout for document ${docId}; using latest known state`)
+        }
+    }
+
+    const browserState = getState(docId)
+    if (browserState?.xml) {
+        documentManager.recordBrowserSync(docId, browserState.xml, source)
+    }
+
+    const document = getDocumentOrThrow(docId)
+    ensureStateForDocument(document)
+    return document
+}
+
+function validateOperations(operations: DiagramOperation[]): DiagramOperation[] {
+    return operations.map((operation) => {
+        if (!operation.new_xml) {
+            return operation
+        }
+
+        const { valid, error, fixed, fixes } = validateAndFixXml(
+            operation.new_xml,
+        )
+
+        if (fixed) {
+            log.info(
+                `Operation ${operation.operation} ${operation.cell_id}: XML auto-fixed: ${fixes.join(", ")}`,
+            )
+            return { ...operation, new_xml: fixed }
+        }
+
+        if (!valid && error) {
+            log.warn(
+                `Operation ${operation.operation} ${operation.cell_id}: XML validation failed: ${error}`,
+            )
+        }
+
+        return operation
+    })
+}
+
+async function applyOperationsWorkflow(
+    docId: string,
+    operations: DiagramOperation[],
+    source: string,
+) {
+    const current = await syncDocumentFromBrowser(docId, `${source}-pre-sync`)
+    const browserState = getState(docId)
+    addHistory(docId, current.currentXml, browserState?.svg || "")
+
+    const validatedOperations = validateOperations(operations)
+    const outcome = documentManager.applyOperations(
+        docId,
+        validatedOperations,
+        source,
+    )
+
+    ensureStateForDocument(outcome.document)
+    setState(docId, outcome.document.currentXml)
+    addHistory(docId, outcome.document.currentXml, "")
+    rememberActiveDocument(docId, true)
+
+    return outcome
+}
+
+function formatRevisionEvent(revision: RevisionEvent) {
+    return {
+        docId: revision.docId,
+        revision: revision.revision,
+        actor: revision.actor,
+        source: revision.source,
+        timestamp: revision.timestamp,
+        summary: revision.summary,
+        semanticChanges: revision.semanticChanges || [],
+    }
+}
+
+// Tool: open_document
 server.registerTool(
-    "start_session",
+    "open_document",
     {
         description:
-            "Start a new diagram session and open the browser for real-time preview. " +
-            "Starts an embedded server and opens a browser window with draw.io. " +
-            "The browser will show diagram updates as they happen.",
-        inputSchema: {},
+            "Open an existing draw.io document or create a new one, start the embedded HTTP server, and open browser preview. Returns the docId to use with the document-scoped MCP tools.",
+        inputSchema: {
+            path: z
+                .string()
+                .optional()
+                .describe(
+                    "Optional file path to open. If omitted, creates a new untitled document.",
+                ),
+        },
     },
-    async () => {
+    async ({ path }) => {
         try {
-            // Start embedded HTTP server
-            const port = await startHttpServer(config.port)
-
-            // Create session
-            const sessionId = `mcp-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 8)}`
-            currentSession = {
-                id: sessionId,
-                xml: "",
-                version: 0,
-                lastGetDiagramTime: 0,
-            }
-
-            // Open browser
-            const browserUrl = `http://localhost:${port}?mcp=${sessionId}`
-            await open(browserUrl)
-
-            log.info(`Started session ${sessionId}, browser at ${browserUrl}`)
-
-            return {
-                content: [
-                    {
-                        type: "text",
-                        text: `Session started successfully!\n\nSession ID: ${sessionId}\nBrowser URL: ${browserUrl}\n\nThe browser will now show real-time diagram updates.`,
-                    },
-                ],
-            }
+            const { document, browserUrl } = await openDocumentWorkflow(path)
+            return documentResult("Document opened successfully!", document, {
+                browserUrl,
+            })
         } catch (error) {
             const message =
                 error instanceof Error ? error.message : String(error)
-            log.error("start_session failed:", message)
-            return {
-                content: [{ type: "text", text: `Error: ${message}` }],
-                isError: true,
-            }
+            log.error("open_document failed:", message)
+            return errorResult(message)
         }
     },
 )
 
-// Tool: create_new_diagram
+// Tool: get_document
+server.registerTool(
+    "get_document",
+    {
+        description:
+            "Fetch the latest document XML and metadata for a specific docId. This syncs from the browser first so human edits are reflected.",
+        inputSchema: {
+            docId: z
+                .string()
+                .describe("Document ID returned by open_document"),
+        },
+    },
+    async ({ docId }) => {
+        try {
+            const document = await syncDocumentFromBrowser(
+                docId,
+                "mcp-get_document",
+            )
+            rememberActiveDocument(docId, true)
+            return documentResult("Current document state", document, {
+                includeXml: true,
+            })
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : String(error)
+            log.error("get_document failed:", message)
+            return errorResult(message)
+        }
+    },
+)
+
+// Tool: apply_operations
+server.registerTool(
+    "apply_operations",
+    {
+        description:
+            "Apply add/update/delete mxCell operations to a specific document. Syncs the latest browser state first, then pushes the updated XML back to the preview.",
+        inputSchema: {
+            docId: z
+                .string()
+                .describe("Document ID returned by open_document"),
+            operations: z
+                .array(
+                    z.object({
+                        operation: z
+                            .enum(["update", "add", "delete"])
+                            .describe(
+                                "Operation to perform: add, update, or delete",
+                            ),
+                        cell_id: z.string().describe("The id of the mxCell"),
+                        new_xml: z
+                            .string()
+                            .optional()
+                            .describe(
+                                "Complete mxCell XML element (required for update/add)",
+                            ),
+                    }),
+                )
+                .describe("Array of operations to apply"),
+        },
+    },
+    async ({ docId, operations }) => {
+        try {
+            const outcome = await applyOperationsWorkflow(
+                docId,
+                operations as DiagramOperation[],
+                "mcp-apply_operations",
+            )
+
+            const warnings = outcome.errors.map(
+                (error) => `- ${error.type} ${error.cellId}: ${error.message}`,
+            )
+            const revision = outcome.revision
+                ? formatRevisionEvent(outcome.revision)
+                : null
+
+            return documentResult(
+                "Operations applied successfully!",
+                outcome.document,
+                {
+                    extraText: [
+                        `operationsApplied: ${operations.length}`,
+                        `revisionCreated: ${revision?.revision ?? "(no-op)"}`,
+                        ...(warnings.length ? ["", "Warnings:", ...warnings] : []),
+                    ],
+                    extraStructured: {
+                        operationsApplied: operations.length,
+                        revision,
+                        warnings: outcome.errors,
+                    },
+                },
+            )
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : String(error)
+            log.error("apply_operations failed:", message)
+            return errorResult(message)
+        }
+    },
+)
+
+// Tool: get_human_changes
+server.registerTool(
+    "get_human_changes",
+    {
+        description:
+            "Return human/browser-originated revisions for a specific document after the given revision number.",
+        inputSchema: {
+            docId: z
+                .string()
+                .describe("Document ID returned by open_document"),
+            sinceRevision: z
+                .number()
+                .int()
+                .min(0)
+                .describe(
+                    "Return human changes with revision numbers greater than this value",
+                ),
+        },
+    },
+    async ({ docId, sinceRevision }) => {
+        try {
+            const document = await syncDocumentFromBrowser(
+                docId,
+                "mcp-get_human_changes",
+            )
+            const changes = documentManager
+                .getHumanChanges(docId, sinceRevision)
+                .map(formatRevisionEvent)
+
+            rememberActiveDocument(docId, true)
+
+            return documentResult("Human changes fetched", document, {
+                extraText: [
+                    `sinceRevision: ${sinceRevision}`,
+                    `changeCount: ${changes.length}`,
+                    "",
+                    "changes:",
+                    JSON.stringify(changes, null, 2),
+                ],
+                extraStructured: {
+                    sinceRevision,
+                    changeCount: changes.length,
+                    changes,
+                },
+            })
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : String(error)
+            log.error("get_human_changes failed:", message)
+            return errorResult(message)
+        }
+    },
+)
+
+// Tool: save_document
+server.registerTool(
+    "save_document",
+    {
+        description:
+            "Save a specific document back to its bound file path. The document must have been opened from a path already.",
+        inputSchema: {
+            docId: z
+                .string()
+                .describe("Document ID returned by open_document"),
+        },
+    },
+    async ({ docId }) => {
+        try {
+            await syncDocumentFromBrowser(docId, "mcp-save_document")
+            const document = await documentManager.saveDocument(docId)
+            ensureStateForDocument(document)
+            rememberActiveDocument(docId)
+            return documentResult("Document saved successfully!", document)
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : String(error)
+            log.error("save_document failed:", message)
+            return errorResult(message)
+        }
+    },
+)
+
+// Compatibility alias: start_session
+server.registerTool(
+    "start_session",
+    {
+        description:
+            "Compatibility alias for open_document() with no path. Starts a new untitled document session and opens browser preview.",
+        inputSchema: {},
+    },
+    async () => {
+        try {
+            const { document, browserUrl } = await openDocumentWorkflow()
+            return documentResult("Session started successfully!", document, {
+                browserUrl,
+            })
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : String(error)
+            log.error("start_session failed:", message)
+            return errorResult(message)
+        }
+    },
+)
+
+// Compatibility alias: create_new_diagram
 server.registerTool(
     "create_new_diagram",
     {
-        description: `Create a NEW diagram from mxGraphModel XML. Use this when creating a diagram from scratch or replacing the current diagram entirely.
-
-CRITICAL: You MUST provide the 'xml' argument in EVERY call. Do NOT call this tool without xml.
-
-When to use this tool:
-- Creating a new diagram from scratch
-- Replacing the current diagram with a completely different one
-- Major structural changes that require regenerating the diagram
-
-When to use edit_diagram instead:
-- Small modifications to existing diagram
-- Adding/removing individual elements
-- Changing labels, colors, or positions
-
-XML FORMAT - Full mxGraphModel structure:
-<mxGraphModel>
-  <root>
-    <mxCell id="0"/>
-    <mxCell id="1" parent="0"/>
-    <mxCell id="2" value="Shape" style="rounded=1;" vertex="1" parent="1">
-      <mxGeometry x="100" y="100" width="120" height="60" as="geometry"/>
-    </mxCell>
-  </root>
-</mxGraphModel>
-
-LAYOUT CONSTRAINTS:
-- Keep all elements within x=0-800, y=0-600 (single page viewport)
-- Start from margins (x=40, y=40), keep elements grouped closely
-- Use unique IDs starting from "2" (0 and 1 are reserved)
-- Set parent="1" for top-level shapes
-- Space shapes 150-200px apart for clear edge routing
-
-EDGE ROUTING RULES:
-- Never let multiple edges share the same path - use different exitY/entryY values
-- For bidirectional connections (A↔B), use OPPOSITE sides
-- Always specify exitX, exitY, entryX, entryY explicitly in edge style
-- Route edges AROUND obstacles using waypoints (add 20-30px clearance)
-- Use natural connection points based on flow (not corners)
-
-COMMON STYLES:
-- Shapes: rounded=1; fillColor=#hex; strokeColor=#hex
-- Edges: endArrow=classic; edgeStyle=orthogonalEdgeStyle; curved=1
-- Text: fontSize=14; fontStyle=1 (bold); align=center`,
+        description:
+            "Compatibility tool that replaces the active document XML with the provided mxGraphModel content.",
         inputSchema: {
             xml: z
                 .string()
@@ -208,19 +540,14 @@ COMMON STYLES:
     },
     async ({ xml: inputXml }) => {
         try {
-            if (!currentSession) {
-                return {
-                    content: [
-                        {
-                            type: "text",
-                            text: "Error: No active session. Please call start_session first.",
-                        },
-                    ],
-                    isError: true,
-                }
-            }
+            const docId = requireActiveDocumentId()
+            const current = await syncDocumentFromBrowser(
+                docId,
+                "mcp-create_new_diagram-pre-sync",
+            )
+            const browserState = getState(docId)
+            addHistory(docId, current.currentXml, browserState?.svg || "")
 
-            // Validate and auto-fix XML
             let xml = inputXml
             const { valid, error, fixed, fixes } = validateAndFixXml(xml)
             if (fixed) {
@@ -228,92 +555,34 @@ COMMON STYLES:
                 log.info(`XML auto-fixed: ${fixes.join(", ")}`)
             }
             if (!valid && error) {
-                log.error(`XML validation failed: ${error}`)
-                return {
-                    content: [
-                        {
-                            type: "text",
-                            text: `Error: XML validation failed - ${error}`,
-                        },
-                    ],
-                    isError: true,
-                }
+                return errorResult(`XML validation failed - ${error}`)
             }
 
-            log.info(`Setting diagram content, ${xml.length} chars`)
+            documentManager.recordBrowserSync(docId, xml, "agent-create_new_diagram")
+            const updated = getDocumentOrThrow(docId)
+            ensureStateForDocument(updated)
+            setState(docId, updated.currentXml)
+            addHistory(docId, updated.currentXml, "")
+            rememberActiveDocument(docId, true)
 
-            // Sync from browser state first
-            const browserState = getState(currentSession.id)
-            if (browserState?.xml) {
-                currentSession.xml = browserState.xml
-            }
-
-            // Save user's state before AI overwrites (with cached SVG)
-            if (currentSession.xml) {
-                addHistory(
-                    currentSession.id,
-                    currentSession.xml,
-                    browserState?.svg || "",
-                )
-            }
-
-            // Update session state
-            currentSession.xml = xml
-            currentSession.version++
-            currentSession.lastGetDiagramTime = Date.now()
-
-            // Push to embedded server state
-            setState(currentSession.id, xml)
-
-            // Save AI result (no SVG yet - will be captured by browser)
-            addHistory(currentSession.id, xml, "")
-
-            log.info(`Diagram content set successfully`)
-
-            return {
-                content: [
-                    {
-                        type: "text",
-                        text: `Diagram content set successfully!\n\nThe diagram is now visible in your browser.\n\nXML length: ${xml.length} characters`,
-                    },
-                ],
-            }
+            return documentResult("Diagram content set successfully!", updated, {
+                extraText: [`xmlLength: ${updated.currentXml.length} characters`],
+            })
         } catch (error) {
             const message =
                 error instanceof Error ? error.message : String(error)
             log.error("create_new_diagram failed:", message)
-            return {
-                content: [{ type: "text", text: `Error: ${message}` }],
-                isError: true,
-            }
+            return errorResult(message)
         }
     },
 )
 
-// Tool: edit_diagram
+// Compatibility alias: edit_diagram
 server.registerTool(
     "edit_diagram",
     {
         description:
-            "Edit the current diagram by ID-based operations (update/add/delete cells).\n\n" +
-            "⚠️ REQUIRED: You MUST call get_diagram BEFORE this tool!\n" +
-            "This fetches the latest state from the browser including any manual user edits.\n" +
-            "Skipping get_diagram WILL cause user's changes to be LOST.\n\n" +
-            "Workflow:\n" +
-            "1. Call get_diagram to see current cell IDs and structure\n" +
-            "2. Use the returned XML to construct your edit operations\n" +
-            "3. Call edit_diagram with your operations\n\n" +
-            "Operations:\n" +
-            "- add: Add a new cell. Provide cell_id (new unique id) and new_xml.\n" +
-            "- update: Replace an existing cell by its id. Provide cell_id and complete new_xml.\n" +
-            "- delete: Remove a cell by its id. Only cell_id is needed.\n\n" +
-            "For add/update, new_xml must be a complete mxCell element including mxGeometry.\n\n" +
-            "Example - Add a rectangle:\n" +
-            '{"operations": [{"operation": "add", "cell_id": "rect-1", "new_xml": "<mxCell id=\\"rect-1\\" value=\\"Hello\\" style=\\"rounded=0;\\" vertex=\\"1\\" parent=\\"1\\"><mxGeometry x=\\"100\\" y=\\"100\\" width=\\"120\\" height=\\"60\\" as=\\"geometry\\"/></mxCell>"}]}\n\n' +
-            "Example - Update a cell:\n" +
-            '{"operations": [{"operation": "update", "cell_id": "3", "new_xml": "<mxCell id=\\"3\\" value=\\"New Label\\" style=\\"rounded=1;\\" vertex=\\"1\\" parent=\\"1\\"><mxGeometry x=\\"100\\" y=\\"100\\" width=\\"120\\" height=\\"60\\" as=\\"geometry\\"/></mxCell>"}]}\n\n' +
-            "Example - Delete a cell:\n" +
-            '{"operations": [{"operation": "delete", "cell_id": "rect-1"}]}',
+            "Compatibility wrapper for apply_operations on the active document. Requires get_diagram/get_document first to reduce accidental overwrites.",
         inputSchema: {
             operations: z
                 .array(
@@ -337,218 +606,80 @@ server.registerTool(
     },
     async ({ operations }) => {
         try {
-            if (!currentSession) {
-                return {
-                    content: [
-                        {
-                            type: "text",
-                            text: "Error: No active session. Please call start_session first.",
-                        },
-                    ],
-                    isError: true,
-                }
-            }
-
-            // Enforce workflow: require get_diagram to be called first
-            const timeSinceGet = Date.now() - currentSession.lastGetDiagramTime
-            if (timeSinceGet > 30000) {
-                // 30 seconds
-                log.warn(
-                    "edit_diagram called without recent get_diagram - rejecting to prevent data loss",
+            const docId = requireActiveDocumentId()
+            const lastRead = recentDocumentReads.get(docId) || 0
+            if (Date.now() - lastRead > 30000) {
+                return errorResult(
+                    "You must call get_document or get_diagram first before edit_diagram so the latest browser state is synced.",
                 )
-                return {
-                    content: [
-                        {
-                            type: "text",
-                            text:
-                                "Error: You must call get_diagram first before edit_diagram.\n\n" +
-                                "This ensures you have the latest diagram state including any manual edits the user made in the browser. " +
-                                "Please call get_diagram, then use that XML to construct your edit operations.",
-                        },
-                    ],
-                    isError: true,
-                }
             }
 
-            // Fetch latest state from browser
-            const browserState = getState(currentSession.id)
-            if (browserState?.xml) {
-                currentSession.xml = browserState.xml
-                log.info("Fetched latest diagram state from browser")
-            }
-
-            if (!currentSession.xml) {
-                return {
-                    content: [
-                        {
-                            type: "text",
-                            text: "Error: No diagram to edit. Please create a diagram first with create_new_diagram.",
-                        },
-                    ],
-                    isError: true,
-                }
-            }
-
-            log.info(`Editing diagram with ${operations.length} operation(s)`)
-
-            // Save before editing (with cached SVG from browser)
-            addHistory(
-                currentSession.id,
-                currentSession.xml,
-                browserState?.svg || "",
+            const outcome = await applyOperationsWorkflow(
+                docId,
+                operations as DiagramOperation[],
+                "agent-edit_diagram",
             )
 
-            // Validate and auto-fix new_xml for each operation
-            const validatedOps = operations.map((op) => {
-                if (op.new_xml) {
-                    const { valid, error, fixed, fixes } = validateAndFixXml(
-                        op.new_xml,
-                    )
-                    if (fixed) {
-                        log.info(
-                            `Operation ${op.operation} ${op.cell_id}: XML auto-fixed: ${fixes.join(", ")}`,
-                        )
-                        return { ...op, new_xml: fixed }
-                    }
-                    if (!valid && error) {
-                        log.warn(
-                            `Operation ${op.operation} ${op.cell_id}: XML validation failed: ${error}`,
-                        )
-                    }
-                }
-                return op
-            })
-
-            // Apply operations
-            const { result, errors } = applyDiagramOperations(
-                currentSession.xml,
-                validatedOps as DiagramOperation[],
+            const warnings = outcome.errors.map(
+                (error) => `- ${error.type} ${error.cellId}: ${error.message}`,
             )
 
-            if (errors.length > 0) {
-                const errorMessages = errors
-                    .map((e) => `${e.type} ${e.cellId}: ${e.message}`)
-                    .join("\n")
-                log.warn(`Edit had ${errors.length} error(s): ${errorMessages}`)
-            }
-
-            // Update state
-            currentSession.xml = result
-            currentSession.version++
-
-            // Push to embedded server
-            setState(currentSession.id, result)
-
-            // Save AI result (no SVG yet - will be captured by browser)
-            addHistory(currentSession.id, result, "")
-
-            log.info(`Diagram edited successfully`)
-
-            const successMsg = `Diagram edited successfully!\n\nApplied ${operations.length} operation(s).`
-            const errorMsg =
-                errors.length > 0
-                    ? `\n\nWarnings:\n${errors.map((e) => `- ${e.type} ${e.cellId}: ${e.message}`).join("\n")}`
-                    : ""
-
-            return {
-                content: [
-                    {
-                        type: "text",
-                        text: successMsg + errorMsg,
+            return documentResult(
+                "Diagram edited successfully!",
+                outcome.document,
+                {
+                    extraText: [
+                        `operationsApplied: ${operations.length}`,
+                        ...(warnings.length ? ["", "Warnings:", ...warnings] : []),
+                    ],
+                    extraStructured: {
+                        operationsApplied: operations.length,
+                        revision: outcome.revision
+                            ? formatRevisionEvent(outcome.revision)
+                            : null,
+                        warnings: outcome.errors,
                     },
-                ],
-            }
+                },
+            )
         } catch (error) {
             const message =
                 error instanceof Error ? error.message : String(error)
             log.error("edit_diagram failed:", message)
-            return {
-                content: [{ type: "text", text: `Error: ${message}` }],
-                isError: true,
-            }
+            return errorResult(message)
         }
     },
 )
 
-// Tool: get_diagram
+// Compatibility alias: get_diagram
 server.registerTool(
     "get_diagram",
     {
         description:
-            "Get the current diagram XML (fetches latest from browser, including user's manual edits). " +
-            "Call this BEFORE edit_diagram if you need to update or delete existing elements, " +
-            "so you can see the current cell IDs and structure.",
+            "Compatibility wrapper for get_document on the active document. Returns the latest XML after syncing browser edits.",
     },
     async () => {
         try {
-            if (!currentSession) {
-                return {
-                    content: [
-                        {
-                            type: "text",
-                            text: "Error: No active session. Please call start_session first.",
-                        },
-                    ],
-                    isError: true,
-                }
-            }
-
-            // Request browser to push fresh state and wait for it
-            const syncRequested = requestSync(currentSession.id)
-            if (syncRequested) {
-                const synced = await waitForSync(currentSession.id)
-                if (!synced) {
-                    log.warn("get_diagram: sync timeout - state may be stale")
-                }
-            }
-
-            // Mark that get_diagram was called (for edit_diagram workflow check)
-            currentSession.lastGetDiagramTime = Date.now()
-
-            // Fetch latest state from browser
-            const browserState = getState(currentSession.id)
-            if (browserState?.xml) {
-                currentSession.xml = browserState.xml
-            }
-
-            if (!currentSession.xml) {
-                return {
-                    content: [
-                        {
-                            type: "text",
-                            text: "No diagram exists yet. Use create_new_diagram to create one.",
-                        },
-                    ],
-                }
-            }
-
-            return {
-                content: [
-                    {
-                        type: "text",
-                        text: `Current diagram XML:\n\n${currentSession.xml}`,
-                    },
-                ],
-            }
+            const docId = requireActiveDocumentId()
+            const document = await syncDocumentFromBrowser(docId, "mcp-get_diagram")
+            rememberActiveDocument(docId, true)
+            return documentResult("Current diagram XML", document, {
+                includeXml: true,
+            })
         } catch (error) {
             const message =
                 error instanceof Error ? error.message : String(error)
             log.error("get_diagram failed:", message)
-            return {
-                content: [{ type: "text", text: `Error: ${message}` }],
-                isError: true,
-            }
+            return errorResult(message)
         }
     },
 )
 
-// Tool: export_diagram
+// Compatibility tool: export_diagram
 server.registerTool(
     "export_diagram",
     {
         description:
-            "Export the current diagram to a file. Supports .drawio (XML), .png, and .svg formats. " +
-            "The format is auto-detected from the file extension, or can be specified explicitly.",
+            "Export the active document to a file. Supports .drawio (XML), .png, and .svg formats.",
         inputSchema: {
             path: z
                 .string()
@@ -565,65 +696,42 @@ server.registerTool(
     },
     async ({ path, format }) => {
         try {
-            if (!currentSession) {
-                return {
-                    content: [
-                        {
-                            type: "text",
-                            text: "Error: No active session. Please call start_session first.",
-                        },
-                    ],
-                    isError: true,
-                }
-            }
-
-            // Fetch latest state
-            const browserState = getState(currentSession.id)
-            if (browserState?.xml) {
-                currentSession.xml = browserState.xml
-            }
-
-            if (!currentSession.xml) {
-                return {
-                    content: [
-                        {
-                            type: "text",
-                            text: "Error: No diagram to export. Please create a diagram first.",
-                        },
-                    ],
-                    isError: true,
-                }
-            }
+            const docId = requireActiveDocumentId()
+            const document = await syncDocumentFromBrowser(
+                docId,
+                "mcp-export_diagram",
+            )
 
             const fs = await import("node:fs/promises")
             const nodePath = await import("node:path")
 
-            // Detect format from extension if not specified
             const ext = nodePath.extname(path).toLowerCase()
             const detectedFormat =
                 format ||
                 (ext === ".png" ? "png" : ext === ".svg" ? "svg" : "drawio")
 
-            // Original .drawio export path (unchanged logic)
             if (detectedFormat === "drawio") {
                 let filePath = path
                 if (!filePath.endsWith(".drawio")) {
                     filePath = `${filePath}.drawio`
                 }
                 const absolutePath = nodePath.resolve(filePath)
-                await fs.writeFile(absolutePath, currentSession.xml, "utf-8")
-                log.info(`Diagram exported to ${absolutePath}`)
+                await fs.writeFile(absolutePath, document.currentXml, "utf-8")
                 return {
                     content: [
                         {
                             type: "text",
-                            text: `Diagram exported successfully!\n\nFile: ${absolutePath}\nSize: ${currentSession.xml.length} characters`,
+                            text: `Diagram exported successfully!\n\nFile: ${absolutePath}\nFormat: drawio\ndocId: ${document.docId}\ncurrentRevision: ${document.currentRevision}\ndirty: ${document.dirty}`,
                         },
                     ],
+                    structuredContent: {
+                        ...documentSummary(document),
+                        exportPath: absolutePath,
+                        exportFormat: "drawio",
+                    },
                 }
             }
 
-            // PNG or SVG: request browser to export via iframe
             let filePath = path
             if (ext !== `.${detectedFormat}`) {
                 if (ext === ".drawio" || ext === ".png" || ext === ".svg") {
@@ -633,45 +741,35 @@ server.registerTool(
             }
             const absolutePath = nodePath.resolve(filePath)
 
-            const state = getState(currentSession.id)
+            const state = getState(docId)
             if (!state) {
-                return {
-                    content: [
-                        {
-                            type: "text",
-                            text: "Error: Session state not found. Is the browser open?",
-                        },
-                    ],
-                    isError: true,
-                }
+                return errorResult(
+                    "Session state not found. Open the document in the browser before exporting.",
+                )
             }
+
             state.exportFormat = detectedFormat as "png" | "svg"
             state.exportData = undefined
 
-            // Wait for browser to produce the export data
             const timeoutMs = 10000
             const start = Date.now()
             while (Date.now() - start < timeoutMs) {
-                if (state.exportData) break
-                await new Promise((r) => setTimeout(r, 200))
+                if (state.exportData) {
+                    break
+                }
+                await new Promise((resolve) => setTimeout(resolve, 200))
             }
+
             const exportData = state.exportData as string | undefined
             state.exportData = undefined
             state.exportFormat = undefined
 
             if (!exportData) {
-                return {
-                    content: [
-                        {
-                            type: "text",
-                            text: "Error: Export timed out. Make sure the browser tab is open and the diagram is loaded.",
-                        },
-                    ],
-                    isError: true,
-                }
+                return errorResult(
+                    "Export timed out. Make sure the browser tab is open and the diagram is loaded.",
+                )
             }
 
-            // Decode and write
             if (detectedFormat === "png") {
                 const base64 = exportData.replace(
                     /^data:image\/png;base64,/,
@@ -685,31 +783,33 @@ server.registerTool(
                         /^data:image\/svg\+xml;base64,/,
                         "",
                     )
-                    svgContent = Buffer.from(base64, "base64").toString("utf-8")
+                    svgContent = Buffer.from(base64, "base64").toString(
+                        "utf-8",
+                    )
                 }
                 await fs.writeFile(absolutePath, svgContent, "utf-8")
             }
 
             const stat = await fs.stat(absolutePath)
-            log.info(
-                `Diagram exported to ${absolutePath} (${detectedFormat}, ${stat.size} bytes)`,
-            )
             return {
                 content: [
                     {
                         type: "text",
-                        text: `Diagram exported successfully!\n\nFile: ${absolutePath}\nFormat: ${detectedFormat}\nSize: ${stat.size} bytes`,
+                        text: `Diagram exported successfully!\n\nFile: ${absolutePath}\nFormat: ${detectedFormat}\nSize: ${stat.size} bytes\ndocId: ${document.docId}\ncurrentRevision: ${document.currentRevision}\ndirty: ${document.dirty}`,
                     },
                 ],
+                structuredContent: {
+                    ...documentSummary(document),
+                    exportPath: absolutePath,
+                    exportFormat: detectedFormat,
+                    size: stat.size,
+                },
             }
         } catch (error) {
             const message =
                 error instanceof Error ? error.message : String(error)
             log.error("export_diagram failed:", message)
-            return {
-                content: [{ type: "text", text: `Error: ${message}` }],
-                isError: true,
-            }
+            return errorResult(message)
         }
     },
 )

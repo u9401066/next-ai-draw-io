@@ -4,7 +4,7 @@
  */
 
 import http from "node:http"
-import { DocumentManager } from "./document-manager.js"
+import { DocumentManager, type DocSession } from "./document-manager.js"
 import {
     addHistory,
     clearHistory,
@@ -242,6 +242,32 @@ function ensureSessionStateInitialized(
     }
 
     void beginDocumentInitialization(state.sessionId, state.filePath || filePath)
+    return state
+}
+
+export function getDocumentManager(): DocumentManager {
+    return documentManager
+}
+
+export function ensureStateForDocument(
+    document: DocSession,
+    sessionId = document.docId,
+): SessionState {
+    let state = getExistingState(sessionId)
+    if (!state) {
+        state = createSessionState(sessionId)
+        state.version = 1
+        stateStore.set(sessionId, state)
+        log.debug(
+            `State initialized from document: session=${sessionId}, doc=${document.docId}`,
+        )
+    }
+
+    docIdToSessionId.set(document.docId, state.sessionId)
+    syncStateMetadata(state, document)
+    state.hasLocalChanges = false
+    state.pendingDocumentSource = undefined
+    state.syncRequested = undefined
     return state
 }
 
