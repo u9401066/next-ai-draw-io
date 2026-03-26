@@ -4,6 +4,7 @@
  */
 
 import http from "node:http"
+import { DocumentManager } from "./document-manager.js"
 import {
     addHistory,
     clearHistory,
@@ -44,6 +45,206 @@ function isLikelyMcpSessionId(sessionId: string): boolean {
     return sessionId.startsWith("mcp-") && sessionId.length <= 128
 }
 
+function isLikelyDocKey(id: string): boolean {
+    return (
+        isLikelyMcpSessionId(id) ||
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+            id,
+        )
+    )
+}
+
+interface SessionState {
+    sessionId: string
+    docId: string | null
+    filePath: string | null
+    currentRevision: number
+    lastSavedRevision: number
+    dirty: boolean
+    activeTabId: string | null
+    xml: string
+    version: number
+    lastUpdated: Date
+    svg?: string // Cached SVG from last browser save
+    syncRequested?: number // Timestamp when sync requested, cleared when browser responds
+    exportFormat?: "png" | "svg" // Set by MCP tool to request browser export
+    exportData?: string // Base64/SVG data returned by browser after export
+    hasLocalChanges: boolean
+    pendingDocumentSource?: string
+    documentInit?: Promise<void>
+}
+
+const documentManager = new DocumentManager()
+const docIdToSessionId = new Map<string, string>()
+export const stateStore = new Map<string, SessionState>()
+
+function resolveSessionKey(id: string): string | null {
+    if (stateStore.has(id)) {
+        return id
+    }
+    return docIdToSessionId.get(id) || null
+}
+
+function getExistingState(id: string): SessionState | undefined {
+    const sessionKey = resolveSessionKey(id)
+    return sessionKey ? stateStore.get(sessionKey) : undefined
+}
+
+function createSessionState(sessionId: string): SessionState {
+    return {
+        sessionId,
+        docId: null,
+        filePath: null,
+        currentRevision: 0,
+        lastSavedRevision: -1,
+        dirty: true,
+        activeTabId: "page-1",
+        xml: DEFAULT_DIAGRAM_XML,
+        version: 0,
+        lastUpdated: new Date(),
+        hasLocalChanges: false,
+    }
+}
+
+function syncStateMetadata(
+    state: SessionState,
+    document: {
+        docId: string
+        filePath: string | null
+        currentRevision: number
+        lastSavedRevision: number
+        dirty: boolean
+        activeTabId: string | null
+        currentXml: string
+        updatedAt: number
+    },
+    adoptXml = true,
+): void {
+    state.docId = document.docId
+    state.filePath = document.filePath
+    state.currentRevision = document.currentRevision
+    state.lastSavedRevision = document.lastSavedRevision
+    state.dirty = document.dirty
+    state.activeTabId = document.activeTabId
+    if (adoptXml) {
+        state.xml = document.currentXml
+    }
+    state.lastUpdated = new Date(document.updatedAt)
+    if (state.version === 0) {
+        state.version = 1
+    }
+}
+
+function safeGetDocument(docId: string) {
+    try {
+        return documentManager.getDocument(docId)
+    } catch {
+        return undefined
+    }
+}
+
+function beginDocumentInitialization(
+    sessionId: string,
+    filePath?: string,
+): Promise<void> | undefined {
+    const state = stateStore.get(sessionId)
+    if (!state || state.docId || state.documentInit) {
+        return state?.documentInit
+    }
+
+    state.documentInit = (async () => {
+        const document = await documentManager.openDocument(filePath)
+        docIdToSessionId.set(document.docId, sessionId)
+
+        if (!state.hasLocalChanges) {
+            const previousXml = state.xml
+            syncStateMetadata(state, document)
+            if (document.currentXml !== previousXml) {
+                state.version += 1
+            }
+        } else {
+            syncStateMetadata(state, document, false)
+            const source = state.pendingDocumentSource || "mcp-http-sync"
+            documentManager.recordBrowserSync(document.docId, state.xml, source)
+            const updated = safeGetDocument(document.docId)
+            if (updated) {
+                syncStateMetadata(state, updated)
+            }
+        }
+
+        state.hasLocalChanges = false
+        state.pendingDocumentSource = undefined
+    })()
+        .catch((error) => {
+            const message = error instanceof Error ? error.message : String(error)
+            log.warn(
+                `Failed to initialize document state for session=${sessionId}: ${message}`,
+            )
+        })
+        .finally(() => {
+            const current = stateStore.get(sessionId)
+            if (current) {
+                current.documentInit = undefined
+            }
+        })
+
+    return state.documentInit
+}
+
+function syncDocumentState(state: SessionState, source: string): void {
+    if (state.docId) {
+        try {
+            const revision = documentManager.recordBrowserSync(
+                state.docId,
+                state.xml,
+                source,
+            )
+            const updated = safeGetDocument(state.docId)
+            if (updated) {
+                syncStateMetadata(state, updated)
+            }
+            state.hasLocalChanges = false
+            state.pendingDocumentSource = undefined
+            log.debug(
+                `Document synced: session=${state.sessionId}, doc=${state.docId}, revision=${revision?.revision ?? state.currentRevision}`,
+            )
+            return
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            log.warn(
+                `Document sync failed for session=${state.sessionId}, doc=${state.docId}: ${message}`,
+            )
+        }
+    }
+
+    state.hasLocalChanges = true
+    state.pendingDocumentSource = source
+    void beginDocumentInitialization(state.sessionId, state.filePath || undefined)
+}
+
+function ensureSessionStateInitialized(
+    sessionId: string,
+    filePath?: string,
+): SessionState | undefined {
+    if (!sessionId) return undefined
+    if (!isLikelyDocKey(sessionId)) return undefined
+
+    let state = getExistingState(sessionId)
+    if (!state) {
+        state = createSessionState(sessionId)
+        state.version = 1
+        stateStore.set(sessionId, state)
+        log.debug(`State initialized: session=${sessionId}, version=1`)
+    }
+
+    if (filePath && !state.filePath) {
+        state.filePath = filePath
+    }
+
+    void beginDocumentInitialization(state.sessionId, state.filePath || filePath)
+    return state
+}
+
 // Find the most recent active session (for auto-redirect when no sessionId provided)
 function getMostRecentSessionId(): string | null {
     let mostRecent: { id: string; lastUpdated: Date } | null = null
@@ -55,56 +256,43 @@ function getMostRecentSessionId(): string | null {
     return mostRecent?.id || null
 }
 
-function ensureSessionStateInitialized(sessionId: string): void {
-    if (!sessionId) return
-    if (!isLikelyMcpSessionId(sessionId)) return
-    if (stateStore.has(sessionId)) return
-
-    setState(sessionId, DEFAULT_DIAGRAM_XML)
-}
-
-interface SessionState {
-    xml: string
-    version: number
-    lastUpdated: Date
-    svg?: string // Cached SVG from last browser save
-    syncRequested?: number // Timestamp when sync requested, cleared when browser responds
-    exportFormat?: "png" | "svg" // Set by MCP tool to request browser export
-    exportData?: string // Base64/SVG data returned by browser after export
-}
-
-export const stateStore = new Map<string, SessionState>()
-
 let server: http.Server | null = null
 let serverPort = 6002
 const MAX_PORT = 6020
 const SESSION_TTL = 60 * 60 * 1000
 
 export function getState(sessionId: string): SessionState | undefined {
-    return stateStore.get(sessionId)
+    return getExistingState(sessionId)
 }
 
 export function setState(sessionId: string, xml: string, svg?: string): number {
-    const existing = stateStore.get(sessionId)
-    const newVersion = (existing?.version || 0) + 1
-    stateStore.set(sessionId, {
-        xml,
-        version: newVersion,
-        lastUpdated: new Date(),
-        svg: svg || existing?.svg, // Preserve cached SVG if not provided
-        syncRequested: undefined, // Clear sync request when browser pushes state
-        exportFormat: existing?.exportFormat, // Preserve pending export request
-        exportData: existing?.exportData, // Preserve export result
-    })
-    log.debug(`State updated: session=${sessionId}, version=${newVersion}`)
-    return newVersion
+    let state = getExistingState(sessionId)
+    if (!state) {
+        state = createSessionState(sessionId)
+        stateStore.set(sessionId, state)
+        void beginDocumentInitialization(sessionId)
+    }
+
+    state.xml = xml
+    state.version += 1
+    state.lastUpdated = new Date()
+    if (svg) {
+        state.svg = svg
+    }
+    state.syncRequested = undefined
+    syncDocumentState(state, "mcp-setState")
+
+    log.debug(
+        `State updated: session=${state.sessionId}, doc=${state.docId || "pending"}, version=${state.version}, revision=${state.currentRevision}`,
+    )
+    return state.version
 }
 
 export function requestSync(sessionId: string): boolean {
-    const state = stateStore.get(sessionId)
+    const state = getExistingState(sessionId)
     if (state) {
         state.syncRequested = Date.now()
-        log.debug(`Sync requested for session=${sessionId}`)
+        log.debug(`Sync requested for session=${state.sessionId}`)
         return true
     }
     log.debug(`Sync requested for non-existent session=${sessionId}`)
@@ -117,7 +305,7 @@ export async function waitForSync(
 ): Promise<boolean> {
     const start = Date.now()
     while (Date.now() - start < timeoutMs) {
-        const state = stateStore.get(sessionId)
+        const state = getExistingState(sessionId)
         if (!state?.syncRequested) return true // Sync completed
         await new Promise((r) => setTimeout(r, 100))
     }
@@ -175,6 +363,9 @@ function cleanupExpiredSessions(): void {
     for (const [sessionId, state] of stateStore) {
         if (now - state.lastUpdated.getTime() > SESSION_TTL) {
             stateStore.delete(sessionId)
+            if (state.docId) {
+                docIdToSessionId.delete(state.docId)
+            }
             clearHistory(sessionId)
             log.info(`Cleaned up expired session: ${sessionId}`)
         }
@@ -209,7 +400,12 @@ function handleRequest(
     }
 
     if (url.pathname === "/" || url.pathname === "/index.html") {
-        const sessionId = url.searchParams.get("mcp") || ""
+        const sessionId =
+            url.searchParams.get("mcp") ||
+            url.searchParams.get("sessionId") ||
+            url.searchParams.get("docId") ||
+            ""
+        const filePath = url.searchParams.get("filePath") || undefined
 
         // Auto-redirect to most recent session if no sessionId provided
         if (!sessionId) {
@@ -221,7 +417,7 @@ function handleRequest(
             }
         }
 
-        ensureSessionStateInitialized(sessionId)
+        ensureSessionStateInitialized(sessionId, filePath)
 
         res.writeHead(200, { "Content-Type": "text/html" })
         res.end(getHtmlPage(sessionId))
@@ -245,21 +441,38 @@ function handleStateApi(
     url: URL,
 ): void {
     if (req.method === "GET") {
-        const sessionId = url.searchParams.get("sessionId")
-        if (!sessionId) {
+        const requestedId =
+            url.searchParams.get("docId") || url.searchParams.get("sessionId")
+        const filePath = url.searchParams.get("filePath") || undefined
+        if (!requestedId) {
             res.writeHead(400, { "Content-Type": "application/json" })
-            res.end(JSON.stringify({ error: "sessionId required" }))
+            res.end(JSON.stringify({ error: "docId or sessionId required" }))
             return
         }
-        ensureSessionStateInitialized(sessionId)
-        const state = stateStore.get(sessionId)
+
+        const state =
+            getExistingState(requestedId) ||
+            ensureSessionStateInitialized(requestedId, filePath)
+        if (!state) {
+            res.writeHead(404, { "Content-Type": "application/json" })
+            res.end(JSON.stringify({ error: "State not found" }))
+            return
+        }
+
         res.writeHead(200, { "Content-Type": "application/json" })
         res.end(
             JSON.stringify({
-                xml: state?.xml || null,
-                version: state?.version || 0,
-                syncRequested: !!state?.syncRequested,
-                exportFormat: state?.exportFormat || null,
+                sessionId: state.sessionId,
+                docId: state.docId || state.sessionId,
+                filePath: state.filePath,
+                currentRevision: state.currentRevision,
+                lastSavedRevision: state.lastSavedRevision,
+                dirty: state.dirty,
+                activeTabId: state.activeTabId,
+                xml: state.xml || null,
+                version: state.version || 0,
+                syncRequested: !!state.syncRequested,
+                exportFormat: state.exportFormat || null,
             }),
         )
     } else if (req.method === "POST") {
@@ -270,31 +483,88 @@ function handleStateApi(
         req.on("end", () => {
             try {
                 const data = JSON.parse(body)
-                const { sessionId } = data
-                if (!sessionId) {
+                const requestedId = data.docId || data.sessionId
+                const filePath =
+                    typeof data.filePath === "string" ? data.filePath : undefined
+                if (!requestedId) {
                     res.writeHead(400, { "Content-Type": "application/json" })
-                    res.end(JSON.stringify({ error: "sessionId required" }))
+                    res.end(
+                        JSON.stringify({ error: "docId or sessionId required" }),
+                    )
                     return
+                }
+
+                const state =
+                    getExistingState(requestedId) ||
+                    ensureSessionStateInitialized(requestedId, filePath)
+                if (!state) {
+                    res.writeHead(404, { "Content-Type": "application/json" })
+                    res.end(JSON.stringify({ error: "State not found" }))
+                    return
+                }
+
+                if (filePath && !state.filePath) {
+                    state.filePath = filePath
+                    void beginDocumentInitialization(
+                        state.sessionId,
+                        state.filePath || filePath,
+                    )
                 }
 
                 // Browser is returning export data (png/svg)
                 if (data.exportData !== undefined) {
-                    const state = stateStore.get(sessionId)
-                    if (state) {
-                        state.exportData = data.exportData
-                        state.exportFormat = undefined
-                        log.debug(
-                            `Export data received for session=${sessionId}`,
-                        )
-                    }
+                    state.exportData = data.exportData
+                    state.exportFormat = undefined
+                    state.lastUpdated = new Date()
+                    log.debug(
+                        `Export data received for session=${state.sessionId}, doc=${state.docId || "pending"}`,
+                    )
                     res.writeHead(200, { "Content-Type": "application/json" })
-                    res.end(JSON.stringify({ success: true }))
+                    res.end(
+                        JSON.stringify({
+                            success: true,
+                            sessionId: state.sessionId,
+                            docId: state.docId || state.sessionId,
+                        }),
+                    )
                     return
                 }
 
-                const version = setState(sessionId, data.xml, data.svg)
+                const xml = typeof data.xml === "string" ? data.xml : undefined
+                if (xml === undefined) {
+                    res.writeHead(400, { "Content-Type": "application/json" })
+                    res.end(JSON.stringify({ error: "xml required" }))
+                    return
+                }
+
+                state.xml = xml
+                state.version += 1
+                state.lastUpdated = new Date()
+                if (data.svg) {
+                    state.svg = data.svg
+                }
+                state.syncRequested = undefined
+                syncDocumentState(
+                    state,
+                    typeof data.source === "string"
+                        ? data.source
+                        : "browser-sync",
+                )
+
                 res.writeHead(200, { "Content-Type": "application/json" })
-                res.end(JSON.stringify({ success: true, version }))
+                res.end(
+                    JSON.stringify({
+                        success: true,
+                        sessionId: state.sessionId,
+                        docId: state.docId || state.sessionId,
+                        version: state.version,
+                        currentRevision: state.currentRevision,
+                        lastSavedRevision: state.lastSavedRevision,
+                        dirty: state.dirty,
+                        activeTabId: state.activeTabId,
+                        filePath: state.filePath,
+                    }),
+                )
             } catch {
                 res.writeHead(400, { "Content-Type": "application/json" })
                 res.end(JSON.stringify({ error: "Invalid JSON" }))
@@ -317,13 +587,16 @@ function handleHistoryApi(
         return
     }
 
-    const sessionId = url.searchParams.get("sessionId")
-    if (!sessionId) {
+    const requestedId =
+        url.searchParams.get("docId") || url.searchParams.get("sessionId")
+    if (!requestedId) {
         res.writeHead(400, { "Content-Type": "application/json" })
-        res.end(JSON.stringify({ error: "sessionId required" }))
+        res.end(JSON.stringify({ error: "docId or sessionId required" }))
         return
     }
 
+    const state = getExistingState(requestedId)
+    const sessionId = state?.sessionId || requestedId
     const history = getHistory(sessionId)
     res.writeHead(200, { "Content-Type": "application/json" })
     res.end(
@@ -350,29 +623,53 @@ function handleRestoreApi(
     })
     req.on("end", () => {
         try {
-            const { sessionId, index } = JSON.parse(body)
-            if (!sessionId || index === undefined) {
+            const { sessionId, docId, index } = JSON.parse(body)
+            const requestedId = docId || sessionId
+            if (!requestedId || index === undefined) {
                 res.writeHead(400, { "Content-Type": "application/json" })
                 res.end(
-                    JSON.stringify({ error: "sessionId and index required" }),
+                    JSON.stringify({ error: "docId/sessionId and index required" }),
                 )
                 return
             }
 
-            const entry = getHistoryEntry(sessionId, index)
+            const state = getExistingState(requestedId)
+            const resolvedSessionId = state?.sessionId || requestedId
+            const entry = getHistoryEntry(resolvedSessionId, index)
             if (!entry) {
                 res.writeHead(404, { "Content-Type": "application/json" })
                 res.end(JSON.stringify({ error: "Entry not found" }))
                 return
             }
 
-            const newVersion = setState(sessionId, entry.xml)
-            addHistory(sessionId, entry.xml, entry.svg)
+            let restoredState =
+                getExistingState(resolvedSessionId) ||
+                ensureSessionStateInitialized(resolvedSessionId)
+            if (!restoredState) {
+                res.writeHead(404, { "Content-Type": "application/json" })
+                res.end(JSON.stringify({ error: "State not found" }))
+                return
+            }
 
-            log.info(`Restored session ${sessionId} to index ${index}`)
+            restoredState.xml = entry.xml
+            restoredState.version += 1
+            restoredState.lastUpdated = new Date()
+            restoredState.syncRequested = undefined
+            syncDocumentState(restoredState, "system-restore")
+            addHistory(resolvedSessionId, entry.xml, entry.svg)
+
+            log.info(`Restored session ${resolvedSessionId} to index ${index}`)
 
             res.writeHead(200, { "Content-Type": "application/json" })
-            res.end(JSON.stringify({ success: true, newVersion }))
+            res.end(
+                JSON.stringify({
+                    success: true,
+                    sessionId: restoredState.sessionId,
+                    docId: restoredState.docId || resolvedSessionId,
+                    newVersion: restoredState.version,
+                    currentRevision: restoredState.currentRevision,
+                }),
+            )
         } catch {
             res.writeHead(400, { "Content-Type": "application/json" })
             res.end(JSON.stringify({ error: "Invalid JSON" }))
@@ -396,14 +693,18 @@ function handleHistorySvgApi(
     })
     req.on("end", () => {
         try {
-            const { sessionId, svg } = JSON.parse(body)
-            if (!sessionId || !svg) {
+            const { sessionId, docId, svg } = JSON.parse(body)
+            const requestedId = docId || sessionId
+            if (!requestedId || !svg) {
                 res.writeHead(400, { "Content-Type": "application/json" })
-                res.end(JSON.stringify({ error: "sessionId and svg required" }))
+                res.end(
+                    JSON.stringify({ error: "docId/sessionId and svg required" }),
+                )
                 return
             }
 
-            updateLastHistorySvg(sessionId, svg)
+            const state = getExistingState(requestedId)
+            updateLastHistorySvg(state?.sessionId || requestedId, svg)
             res.writeHead(200, { "Content-Type": "application/json" })
             res.end(JSON.stringify({ success: true }))
         } catch {
@@ -656,11 +957,20 @@ function getHtmlPage(sessionId: string): string {
     </div>
     <script>
         const sessionId = "${sessionId}";
+        let currentDocId = null;
         const iframe = document.getElementById('drawio');
         let currentVersion = 0, isReady = false, pendingXml = null, lastXml = null;
         let pendingSvgExport = null;
         let pendingAiSvg = false;
         let pendingMcpExport = null; // 'png' or 'svg' when MCP requested export
+
+        function buildStatePayload(extra = {}) {
+            return JSON.stringify({
+                sessionId,
+                ...(currentDocId ? { docId: currentDocId } : {}),
+                ...extra,
+            });
+        }
 
         window.addEventListener('message', (e) => {
             if (e.origin !== '${DRAWIO_ORIGIN}') return;
@@ -671,10 +981,19 @@ function getHtmlPage(sessionId: string): string {
                     if (pendingXml) { loadDiagram(pendingXml); pendingXml = null; }
                 } else if ((msg.event === 'save' || msg.event === 'autosave') && msg.xml && msg.xml !== lastXml) {
                     // Request SVG export, then push state with SVG
-                    pendingSvgExport = msg.xml;
+                    pendingSvgExport = {
+                        xml: msg.xml,
+                        source: msg.event === 'autosave' ? 'browser-autosave' : 'browser-save',
+                    };
                     iframe.contentWindow.postMessage(JSON.stringify({ action: 'export', format: 'svg' }), '*');
                     // Fallback if export doesn't respond
-                    setTimeout(() => { if (pendingSvgExport === msg.xml) { pushState(msg.xml, ''); pendingSvgExport = null; } }, 2000);
+                    setTimeout(() => {
+                        if (pendingSvgExport && pendingSvgExport.xml === msg.xml) {
+                            const pending = pendingSvgExport;
+                            pendingSvgExport = null;
+                            pushState(msg.xml, '', pending.source);
+                        }
+                    }, 2000);
                 } else if (msg.event === 'export' && msg.data) {
                     // Handle MCP server export request (png/svg)
                     // Verify the response matches the requested format to avoid capturing
@@ -688,7 +1007,7 @@ function getHtmlPage(sessionId: string): string {
                             fetch('/api/state', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ sessionId, exportData: d })
+                                body: buildStatePayload({ exportData: d })
                             }).catch(() => {});
                             return;
                         }
@@ -713,22 +1032,22 @@ function getHtmlPage(sessionId: string): string {
                     // Handle sync export (XML format) - server requested fresh state
                     if (pendingSyncExport && !msg.data.startsWith('data:') && !msg.data.startsWith('<svg')) {
                         pendingSyncExport = false;
-                        pushState(msg.data, '');
+                        pushState(msg.data, '', 'browser-sync-export');
                         return;
                     }
                     // Handle SVG export
                     let svg = msg.data;
                     if (!svg.startsWith('data:')) svg = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svg)));
                     if (pendingSvgExport) {
-                        const xml = pendingSvgExport;
+                        const pending = pendingSvgExport;
                         pendingSvgExport = null;
-                        pushState(xml, svg);
+                        pushState(pending.xml, svg, pending.source);
                     } else if (pendingAiSvg) {
                         pendingAiSvg = false;
                         fetch('/api/history-svg', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ sessionId, svg })
+                            body: buildStatePayload({ svg })
                         }).catch(() => {});
                     }
                 }
@@ -747,15 +1066,20 @@ function getHtmlPage(sessionId: string): string {
             }
         }
 
-        async function pushState(xml, svg = '') {
+        async function pushState(xml, svg = '', source = 'browser-sync') {
             if (!sessionId) return;
             try {
                 const r = await fetch('/api/state', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ sessionId, xml, svg })
+                    body: buildStatePayload({ xml, svg, source })
                 });
-                if (r.ok) { const d = await r.json(); currentVersion = d.version; lastXml = xml; }
+                if (r.ok) {
+                    const d = await r.json();
+                    currentVersion = d.version;
+                    currentDocId = d.docId || currentDocId;
+                    lastXml = xml;
+                }
             } catch (e) { console.error('Push failed:', e); }
         }
 
@@ -764,9 +1088,12 @@ function getHtmlPage(sessionId: string): string {
         async function poll() {
             if (!sessionId) return;
             try {
-                const r = await fetch('/api/state?sessionId=' + encodeURIComponent(sessionId));
+                const params = new URLSearchParams({ sessionId });
+                if (currentDocId) params.set('docId', currentDocId);
+                const r = await fetch('/api/state?' + params.toString());
                 if (!r.ok) return;
                 const s = await r.json();
+                currentDocId = s.docId || currentDocId;
                 // Handle sync request - server needs fresh state
                 if (s.syncRequested && !pendingSyncExport) {
                     pendingSyncExport = true;
@@ -862,7 +1189,9 @@ function getHtmlPage(sessionId: string): string {
         historyBtn.onclick = async () => {
             if (!sessionId) return;
             try {
-                const r = await fetch('/api/history?sessionId=' + encodeURIComponent(sessionId));
+                const params = new URLSearchParams({ sessionId });
+                if (currentDocId) params.set('docId', currentDocId);
+                const r = await fetch('/api/history?' + params.toString());
                 if (r.ok) {
                     const d = await r.json();
                     historyData = d.entries || [];
@@ -907,9 +1236,14 @@ function getHtmlPage(sessionId: string): string {
                 const r = await fetch('/api/restore', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ sessionId, index: selectedIdx })
+                    body: buildStatePayload({ index: selectedIdx })
                 });
-                if (r.ok) { cancelBtn.onclick(); await poll(); }
+                if (r.ok) {
+                    const d = await r.json();
+                    currentDocId = d.docId || currentDocId;
+                    cancelBtn.onclick();
+                    await poll();
+                }
                 else { alert('Restore failed'); }
             } catch { alert('Restore failed'); }
             restoreBtn.textContent = 'Restore';
