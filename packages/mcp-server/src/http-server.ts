@@ -444,6 +444,19 @@ function stripBasePath(pathname: string): string | null {
     return null
 }
 
+function extractDocIdFromCanvasPath(routedPath: string): string | null {
+    const match = routedPath.match(/^\/canvas\/([^/]+)\/?$/)
+    if (!match) {
+        return null
+    }
+
+    try {
+        return decodeURIComponent(match[1])
+    } catch {
+        return match[1]
+    }
+}
+
 function handleRequest(
     req: http.IncomingMessage,
     res: http.ServerResponse,
@@ -467,8 +480,26 @@ function handleRequest(
         return
     }
 
-    if (routedPath === "/" || routedPath === "/index.html") {
+    const canvasDocId = extractDocIdFromCanvasPath(routedPath)
+
+    if (routedPath === "/canvas" || routedPath === "/canvas/") {
+        const recentSessionId = getMostRecentSessionId()
+        if (recentSessionId) {
+            res.writeHead(302, {
+                Location: `${HTTP_BASE_PATH || ""}/canvas/${encodeURIComponent(recentSessionId)}`,
+            })
+            res.end()
+            return
+        }
+
+        res.writeHead(404)
+        res.end("No recent document")
+        return
+    }
+
+    if (routedPath === "/" || routedPath === "/index.html" || canvasDocId) {
         const sessionId =
+            canvasDocId ||
             url.searchParams.get("mcp") ||
             url.searchParams.get("sessionId") ||
             url.searchParams.get("docId") ||
@@ -479,7 +510,9 @@ function handleRequest(
         if (!sessionId) {
             const recentSessionId = getMostRecentSessionId()
             if (recentSessionId) {
-                res.writeHead(302, { Location: `${HTTP_BASE_PATH || ""}/?mcp=${recentSessionId}` })
+                res.writeHead(302, {
+                    Location: `${HTTP_BASE_PATH || ""}/canvas/${encodeURIComponent(recentSessionId)}`,
+                })
                 res.end()
                 return
             }

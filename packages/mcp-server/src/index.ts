@@ -166,13 +166,19 @@ function getLanBaseUrl(port: number): string | null {
     return null
 }
 
+function buildCanvasPath(basePath: string, docId: string): string {
+    return `${basePath || ""}/canvas/${encodeURIComponent(docId)}`
+}
+
 function getPublicUrl(
     port: number,
     docId: string,
     basePath: string,
 ): string | null {
+    const canvasPath = buildCanvasPath(basePath, docId)
+
     if (config.publicBaseUrl) {
-        return `${config.publicBaseUrl}/?docId=${docId}`
+        return `${config.publicBaseUrl}${canvasPath}`
     }
 
     const lanBaseUrl = getLanBaseUrl(port)
@@ -180,7 +186,7 @@ function getPublicUrl(
         return null
     }
 
-    return `${lanBaseUrl}${basePath || ""}/?docId=${docId}`
+    return `${lanBaseUrl}${canvasPath}`
 }
 
 function documentResult(
@@ -230,7 +236,7 @@ async function openDocumentWorkflow(filePath?: string) {
     ensureStateForDocument(document)
 
     const basePath = getServerBasePath()
-    const browserPath = `${basePath || ""}/?docId=${document.docId}`
+    const browserPath = buildCanvasPath(basePath, document.docId)
     const browserUrl = `http://localhost:${port}${browserPath}`
     const publicUrl = getPublicUrl(port, document.docId, basePath)
     await open(browserUrl)
