@@ -28,6 +28,7 @@ class XMLSerializerPolyfill {
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
+import os from "node:os"
 import open from "open"
 import { z } from "zod"
 import { type DiagramOperation } from "./diagram-operations.js"
@@ -52,6 +53,7 @@ import { validateAndFixXml } from "./xml-validation.js"
 // Server configuration
 const config = {
     port: parseInt(process.env.PORT || "6002", 10),
+    publicBaseUrl: process.env.PUBLIC_BASE_URL?.replace(/\/$/, "") || null,
 }
 
 const documentManager = getDocumentManager()
@@ -149,11 +151,34 @@ function documentSummaryText(document: DocSession): string {
     ].join("\n")
 }
 
+function getLanBaseUrl(port: number): string | null {
+    const interfaces = os.networkInterfaces()
+
+    for (const addresses of Object.values(interfaces)) {
+        for (const address of addresses || []) {
+            if (address.family === "IPv4" && !address.internal) {
+                return `http://${address.address}:${port}`
+            }
+        }
+    }
+
+    return null
+}
+
+function getPublicUrl(port: number, docId: string): string | null {
+    const baseUrl = config.publicBaseUrl || getLanBaseUrl(port)
+    if (!baseUrl) {
+        return null
+    }
+    return `${baseUrl}?docId=${docId}`
+}
+
 function documentResult(
     heading: string,
     document: DocSession,
     options?: {
         browserUrl?: string
+        publicUrl?: string | null
         includeXml?: boolean
         extraText?: string[]
         extraStructured?: Record<string, unknown>
@@ -163,6 +188,10 @@ function documentResult(
 
     if (options?.browserUrl) {
         sections.push("", `browserUrl: ${options.browserUrl}`)
+    }
+
+    if (options?.publicUrl) {
+        sections.push("", `publicUrl: ${options.publicUrl}`)
     }
 
     if (options?.extraText?.length) {
@@ -178,6 +207,7 @@ function documentResult(
         structuredContent: {
             ...documentSummary(document),
             ...(options?.browserUrl ? { browserUrl: options.browserUrl } : {}),
+            ...(options?.publicUrl ? { publicUrl: options.publicUrl } : {}),
             ...(options?.includeXml ? { xml: document.currentXml } : {}),
             ...(options?.extraStructured || {}),
         },
@@ -190,14 +220,15 @@ async function openDocumentWorkflow(filePath?: string) {
     ensureStateForDocument(document)
 
     const browserUrl = `http://localhost:${port}?docId=${document.docId}`
+    const publicUrl = getPublicUrl(port, document.docId)
     await open(browserUrl)
 
     rememberActiveDocument(document.docId)
     log.info(
-        `Opened document ${document.docId} (${document.filePath ?? "untitled"}), browser at ${browserUrl}`,
+        `Opened document ${document.docId} (${document.filePath ?? "untitled"}), browser at ${browserUrl}${publicUrl ? `, public at ${publicUrl}` : ""}`,
     )
 
-    return { document, browserUrl }
+    return { document, browserUrl, publicUrl }
 }
 
 async function syncDocumentFromBrowser(
@@ -305,9 +336,10 @@ server.registerTool(
     },
     async ({ path }) => {
         try {
-            const { document, browserUrl } = await openDocumentWorkflow(path)
+            const { document, browserUrl, publicUrl } = await openDocumentWorkflow(path)
             return documentResult("Document opened successfully!", document, {
                 browserUrl,
+                publicUrl,
             })
         } catch (error) {
             const message =
@@ -511,9 +543,10 @@ server.registerTool(
     },
     async () => {
         try {
-            const { document, browserUrl } = await openDocumentWorkflow()
+            const { document, browserUrl, publicUrl } = await openDocumentWorkflow()
             return documentResult("Session started successfully!", document, {
                 browserUrl,
+                publicUrl,
             })
         } catch (error) {
             const message =
