@@ -18,6 +18,21 @@ import { log } from "./logger.js"
 const DRAWIO_BASE_URL =
     process.env.DRAWIO_BASE_URL || "https://embed.diagrams.net"
 
+function normalizeBasePath(pathValue?: string | null): string {
+    if (!pathValue || pathValue === "/") {
+        return ""
+    }
+
+    const trimmed = pathValue.trim()
+    if (!trimmed || trimmed === "/") {
+        return ""
+    }
+
+    return `/${trimmed.replace(/^\/+|\/+$/g, "")}`
+}
+
+const HTTP_BASE_PATH = normalizeBasePath(process.env.HTTP_BASE_PATH)
+
 // Extract origin (scheme + host + port) from URL for postMessage security check
 function getOrigin(url: string): string {
     try {
@@ -409,11 +424,32 @@ export function getServerPort(): number {
     return serverPort
 }
 
+export function getServerBasePath(): string {
+    return HTTP_BASE_PATH
+}
+
+function stripBasePath(pathname: string): string | null {
+    if (!HTTP_BASE_PATH) {
+        return pathname
+    }
+
+    if (pathname === HTTP_BASE_PATH) {
+        return "/"
+    }
+
+    if (pathname.startsWith(`${HTTP_BASE_PATH}/`)) {
+        return pathname.slice(HTTP_BASE_PATH.length) || "/"
+    }
+
+    return null
+}
+
 function handleRequest(
     req: http.IncomingMessage,
     res: http.ServerResponse,
 ): void {
     const url = new URL(req.url || "/", `http://localhost:${serverPort}`)
+    const routedPath = stripBasePath(url.pathname)
 
     res.setHeader("Access-Control-Allow-Origin", "*")
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
@@ -425,7 +461,13 @@ function handleRequest(
         return
     }
 
-    if (url.pathname === "/" || url.pathname === "/index.html") {
+    if (routedPath === null) {
+        res.writeHead(404)
+        res.end("Not Found")
+        return
+    }
+
+    if (routedPath === "/" || routedPath === "/index.html") {
         const sessionId =
             url.searchParams.get("mcp") ||
             url.searchParams.get("sessionId") ||
@@ -437,7 +479,7 @@ function handleRequest(
         if (!sessionId) {
             const recentSessionId = getMostRecentSessionId()
             if (recentSessionId) {
-                res.writeHead(302, { Location: `/?mcp=${recentSessionId}` })
+                res.writeHead(302, { Location: `${HTTP_BASE_PATH || ""}/?mcp=${recentSessionId}` })
                 res.end()
                 return
             }
@@ -447,13 +489,13 @@ function handleRequest(
 
         res.writeHead(200, { "Content-Type": "text/html" })
         res.end(getHtmlPage(sessionId))
-    } else if (url.pathname === "/api/state") {
+    } else if (routedPath === "/api/state") {
         handleStateApi(req, res, url)
-    } else if (url.pathname === "/api/history") {
+    } else if (routedPath === "/api/history") {
         handleHistoryApi(req, res, url)
-    } else if (url.pathname === "/api/restore") {
+    } else if (routedPath === "/api/restore") {
         handleRestoreApi(req, res)
-    } else if (url.pathname === "/api/history-svg") {
+    } else if (routedPath === "/api/history-svg") {
         handleHistorySvgApi(req, res)
     } else {
         res.writeHead(404)
@@ -983,12 +1025,20 @@ function getHtmlPage(sessionId: string): string {
     </div>
     <script>
         const sessionId = "${sessionId}";
+        const basePath = "${HTTP_BASE_PATH}";
         let currentDocId = null;
         const iframe = document.getElementById('drawio');
         let currentVersion = 0, isReady = false, pendingXml = null, lastXml = null;
         let pendingSvgExport = null;
         let pendingAiSvg = false;
         let pendingMcpExport = null; // 'png' or 'svg' when MCP requested export
+
+        function apiUrl(path, params) {
+            const target = basePath + path;
+            if (!params) return target;
+            const qs = params instanceof URLSearchParams ? params.toString() : new URLSearchParams(params).toString();
+            return qs ? target + '?' + qs : target;
+        }
 
         function buildStatePayload(extra = {}) {
             return JSON.stringify({
@@ -1030,7 +1080,7 @@ function getHtmlPage(sessionId: string): string {
                         const isSvg = pendingMcpExport === 'svg' && (d.startsWith('data:image/svg') || d.startsWith('<svg'));
                         if (isPng || isSvg) {
                             pendingMcpExport = null;
-                            fetch('/api/state', {
+                            fetch(apiUrl('/api/state'), {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: buildStatePayload({ exportData: d })
@@ -1070,7 +1120,7 @@ function getHtmlPage(sessionId: string): string {
                         pushState(pending.xml, svg, pending.source);
                     } else if (pendingAiSvg) {
                         pendingAiSvg = false;
-                        fetch('/api/history-svg', {
+                        fetch(apiUrl('/api/history-svg'), {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: buildStatePayload({ svg })
@@ -1095,7 +1145,7 @@ function getHtmlPage(sessionId: string): string {
         async function pushState(xml, svg = '', source = 'browser-sync') {
             if (!sessionId) return;
             try {
-                const r = await fetch('/api/state', {
+                const r = await fetch(apiUrl('/api/state'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: buildStatePayload({ xml, svg, source })
@@ -1116,7 +1166,7 @@ function getHtmlPage(sessionId: string): string {
             try {
                 const params = new URLSearchParams({ sessionId });
                 if (currentDocId) params.set('docId', currentDocId);
-                const r = await fetch('/api/state?' + params.toString());
+                const r = await fetch(apiUrl('/api/state', params));
                 if (!r.ok) return;
                 const s = await r.json();
                 currentDocId = s.docId || currentDocId;
@@ -1217,7 +1267,7 @@ function getHtmlPage(sessionId: string): string {
             try {
                 const params = new URLSearchParams({ sessionId });
                 if (currentDocId) params.set('docId', currentDocId);
-                const r = await fetch('/api/history?' + params.toString());
+                const r = await fetch(apiUrl('/api/history', params));
                 if (r.ok) {
                     const d = await r.json();
                     historyData = d.entries || [];
@@ -1259,7 +1309,7 @@ function getHtmlPage(sessionId: string): string {
             restoreBtn.disabled = true;
             restoreBtn.textContent = 'Restoring...';
             try {
-                const r = await fetch('/api/restore', {
+                const r = await fetch(apiUrl('/api/restore'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: buildStatePayload({ index: selectedIdx })

@@ -40,6 +40,7 @@ import { addHistory } from "./history.js"
 import {
     ensureStateForDocument,
     getDocumentManager,
+    getServerBasePath,
     getState,
     requestSync,
     setState,
@@ -165,12 +166,21 @@ function getLanBaseUrl(port: number): string | null {
     return null
 }
 
-function getPublicUrl(port: number, docId: string): string | null {
-    const baseUrl = config.publicBaseUrl || getLanBaseUrl(port)
-    if (!baseUrl) {
+function getPublicUrl(
+    port: number,
+    docId: string,
+    basePath: string,
+): string | null {
+    if (config.publicBaseUrl) {
+        return `${config.publicBaseUrl}/?docId=${docId}`
+    }
+
+    const lanBaseUrl = getLanBaseUrl(port)
+    if (!lanBaseUrl) {
         return null
     }
-    return `${baseUrl}?docId=${docId}`
+
+    return `${lanBaseUrl}${basePath || ""}/?docId=${docId}`
 }
 
 function documentResult(
@@ -219,8 +229,10 @@ async function openDocumentWorkflow(filePath?: string) {
     const document = await documentManager.openDocument(filePath)
     ensureStateForDocument(document)
 
-    const browserUrl = `http://localhost:${port}?docId=${document.docId}`
-    const publicUrl = getPublicUrl(port, document.docId)
+    const basePath = getServerBasePath()
+    const browserPath = `${basePath || ""}/?docId=${document.docId}`
+    const browserUrl = `http://localhost:${port}${browserPath}`
+    const publicUrl = getPublicUrl(port, document.docId, basePath)
     await open(browserUrl)
 
     rememberActiveDocument(document.docId)
