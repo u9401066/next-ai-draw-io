@@ -106,7 +106,7 @@ services:
 |------|------|------|------|
 | `web` | Next.js 15 | 6002 | 前端 + API Routes |
 | `ws-server` | Node.js | 6003, 6004 | 即時通訊 |
-| `mcp-server` | Python + FastMCP | 6005 | Agent 控制 |
+| `mcp-server` | Python + official MCP SDK 2 | 6005 | Agent 控制 |
 
 ---
 

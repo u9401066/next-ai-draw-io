@@ -4,6 +4,10 @@ MCP (Model Context Protocol) server that enables AI agents like Claude Desktop a
 
 **Self-contained** - includes an embedded HTTP server, no external dependencies required.
 
+Requires Node.js 20 or newer. Version 0.2 uses the official MCP TypeScript SDK 2
+split packages and is smoke-tested with a pinned `2026-07-28` client over both
+in-memory and stdio subprocess transports.
+
 ## Quick Start
 
 ```json

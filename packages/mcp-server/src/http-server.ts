@@ -182,6 +182,7 @@ function cleanupExpiredSessions(): void {
 }
 
 const cleanupIntervalId = setInterval(cleanupExpiredSessions, 5 * 60 * 1000)
+cleanupIntervalId.unref()
 
 export function shutdown(): void {
     clearInterval(cleanupIntervalId)

@@ -43,6 +43,56 @@ jobs:
       - name: Security audit
         run: npm audit --audit-level=high --omit=dev
 
+  typescript-mcp-sdk2:
+    name: TypeScript MCP SDK 2 (${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ["20", "24"]
+    defaults:
+      run:
+        working-directory: packages/mcp-server
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: packages/mcp-server/package-lock.json
+
+      - name: Install frozen dependencies
+        run: npm ci
+
+      - name: Run direct and stdio SDK 2 smokes
+        run: npm run smoke
+
+      - name: Security audit
+        run: npm audit --audit-level=high
+
+      - name: Reject MCP SDK 1 and FastMCP runtime paths
+        if: matrix.node-version == '24'
+        working-directory: .
+        run: |
+          if rg -n '@modelcontextprotocol/sdk' \
+            packages/mcp-server/package.json \
+            packages/mcp-server/package-lock.json \
+            packages/mcp-server/src \
+            packages/mcp-server/scripts; then
+            echo 'MCP TypeScript SDK 1 runtime path detected' >&2
+            exit 1
+          fi
+          if rg -n 'mcp\.server\.fastmcp|from fastmcp|import fastmcp' \
+            mcp-server/pyproject.toml \
+            mcp-server/uv.lock \
+            mcp-server/src; then
+            echo 'FastMCP runtime path detected' >&2
+            exit 1
+          fi
+
   python-mcp-sdk2:
     name: Python MCP SDK 2 (${{ matrix.python-version }})
     runs-on: ubuntu-latest
