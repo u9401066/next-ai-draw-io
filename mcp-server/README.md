@@ -1,6 +1,20 @@
 # Draw.io MCP Server
 
-讓 GitHub Copilot 可以創建和編輯 Draw.io 圖表的 MCP Server。
+讓 GitHub Copilot 與其他 MCP client 可以創建和編輯 Draw.io 圖表的 MCP
+Server。Python server 2.x 使用官方 MCP Python SDK 2、`MCPServer` 與
+`2026-07-28` 協定路徑；不再支援 MCP SDK 1。
+
+## 相容性
+
+| 元件 | 支援範圍 |
+|------|----------|
+| Python | 3.10+ |
+| Python package | `drawio-mcp-server==2.x` |
+| MCP Python SDK | `mcp>=2,<3` |
+| MCP protocol smoke | `2026-07-28` |
+
+> 2.0.0 是 breaking release。若 client 環境仍固定 MCP SDK 1，請先升級
+> client；server 不提供舊版 runtime 或相容 shim。
 
 ## 架構
 
@@ -19,10 +33,12 @@ src/drawio_mcp_server/
     ├── diagram_tools.py   # 圖表創建/編輯/讀取
     ├── template_tools.py  # 模板和匯出
     ├── tab_tools.py       # 分頁管理
-    └── web_tools.py       # Web 服務管理
+    ├── web_tools.py       # Web 服務管理
+    ├── guideline_tools.py # 繪圖品質指南
+    └── diff_tools.py      # 差異式編輯
 ```
 
-## 功能 (10 Tools)
+## 功能（23 Tools）
 
 ### 圖表操作
 - 🎨 **create_diagram** - 根據文字描述創建圖表
@@ -35,13 +51,29 @@ src/drawio_mcp_server/
 - 📤 **export_diagram** - 匯出為 SVG/PNG/PDF
 
 ### 分頁管理
+- ➕ **create_tab** - 建立新的圖表分頁
 - 📑 **list_tabs** - 列出所有開啟的分頁
 - 🔀 **switch_tab** - 切換到指定分頁
 - ❌ **close_tab** - 關閉分頁
+- 📄 **get_diagram_content** - 取得目前圖表內容
+- 💾 **save_tab** - 將分頁存成 `.drawio`
+- 📂 **load_file** - 載入 `.drawio` 或 XML 檔
 
 ### Web 服務
 - 🌐 **start_drawio_web** - 啟動 Web 編輯器
 - 📊 **get_web_status** - 檢查 Web 狀態
+- 📨 **get_user_events** - 讀取瀏覽器端使用者事件
+
+### 繪圖品質指南
+- 📐 **get_drawing_guidelines** - 取得圖種與版面指南
+- 🎛️ **get_style_string** - 產生標準 Draw.io style 字串
+- 🎨 **list_available_styles** - 列出可用樣式
+
+### 差異式編輯
+- 🔎 **get_diagram_changes** - 取得瀏覽器端增量變更
+- 🧩 **apply_diagram_changes** - 套用節點與連線操作
+- 🧭 **get_diagram_elements** - 列出圖表元素與 ID
+- 🔄 **sync_diagram_state** - 同步 Agent 與瀏覽器基準狀態
 
 ## 支援的圖表類型
 
@@ -63,7 +95,7 @@ src/drawio_mcp_server/
 
 ```bash
 cd integrations/next-ai-draw-io/mcp-server
-uv sync
+uv sync --frozen --dev
 ```
 
 ### 使用 pip
@@ -137,15 +169,33 @@ pip install -e .
 ## 開發
 
 ```bash
-# 安裝開發依賴
-uv sync --dev
+# 依 standalone lock 安裝開發依賴
+uv sync --frozen --dev
 
-# 執行測試
-uv run pytest
+# 執行全部 Python 測試（含 direct + stdio SDK 2 smokes）
+uv run --frozen pytest -q
 
-# 本地測試 MCP Server
+# 只執行 direct 2026 client smoke
+uv run --frozen pytest -q \
+  tests/test_sdk2_smoke.py::test_sdk2_direct_client_uses_2026_protocol
+
+# 只執行真實 stdio subprocess smoke
+uv run --frozen pytest -q \
+  tests/test_sdk2_smoke.py::test_sdk2_stdio_subprocess_uses_2026_protocol
+
+# 建置 wheel 與 sdist
+uv build
+
+# 驗證 frozen、runtime-only 的 standalone image
+docker build --tag drawio-mcp-server:local .
+
+# 本地啟動 MCP Server
 uv run drawio-mcp-server
 ```
+
+兩個 smoke 都會明確協商 `2026-07-28`、驗證完整 23-tool surface，並呼叫
+不需要啟動 Next.js 的 `list_templates`。stdio smoke 另以
+`DRAWIO_AUTO_START_WEB=false` 啟動獨立子程序，避免測試依賴瀏覽器或網路。
 
 ## 授權
 

@@ -42,3 +42,41 @@ jobs:
 
       - name: Security audit
         run: npm audit --audit-level=high --omit=dev
+
+  python-mcp-sdk2:
+    name: Python MCP SDK 2 (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+    defaults:
+      run:
+        working-directory: mcp-server
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: mcp-server/uv.lock
+
+      - name: Install frozen dependencies
+        run: uv sync --frozen --dev --python "${{ matrix.python-version }}"
+
+      - name: Run SDK 2 protocol smokes
+        run: uv run --frozen pytest -q
+
+      - name: Build Python package
+        run: uv build
+
+      - name: Build standalone stdio image
+        if: matrix.python-version == '3.13'
+        run: docker build --tag drawio-mcp-server:ci .

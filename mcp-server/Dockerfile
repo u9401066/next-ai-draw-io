@@ -6,21 +6,16 @@ WORKDIR /app
 # 安裝 uv
 RUN pip install uv
 
-# 複製專案檔案
-COPY pyproject.toml uv.lock ./
+# 複製專案檔案；README 是 Hatch package metadata 的必要輸入。
+COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
 
-# 安裝依賴
-RUN uv sync --frozen
+# 安裝 runtime 依賴；測試套件只存在於 dev dependency group。
+RUN uv sync --frozen --no-dev
 
 # 設定環境變數
 ENV PYTHONUNBUFFERED=1
-ENV MCP_HOST=0.0.0.0
-ENV MCP_PORT=6005
-ENV WEB_PORT=6002
+ENV DRAWIO_AUTO_START_WEB=false
 
-# 暴露 MCP Server port
-EXPOSE 6005
-
-# 啟動 MCP Server
-CMD ["uv", "run", "drawio-mcp-server"]
+# 啟動 stdio MCP Server；外部 Web editor 可透過 DRAWIO_NEXTJS_URL 連接。
+CMD ["uv", "run", "--frozen", "--no-dev", "drawio-mcp-server"]
