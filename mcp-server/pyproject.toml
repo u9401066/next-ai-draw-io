@@ -1,6 +1,6 @@
 [project]
 name = "drawio-mcp-server"
-version = "1.0.0"
+version = "2.0.0"
 description = "MCP Server for creating and editing Draw.io diagrams via GitHub Copilot"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -8,10 +8,10 @@ license = {text = "MIT"}
 authors = [
     {name = "u9401066"}
 ]
-keywords = ["mcp", "draw.io", "diagram", "github-copilot", "fastmcp"]
+keywords = ["mcp", "draw.io", "diagram", "github-copilot", "mcp-sdk2"]
 
 dependencies = [
-    "fastmcp>=0.4.0",
+    "mcp>=2.0.0,<3",
     "pydantic>=2.0.0",
     "httpx>=0.27.0",
 ]
@@ -26,7 +26,10 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/drawio_mcp_server"]
 
-[tool.uv]
-dev-dependencies = [
+[dependency-groups]
+dev = [
     "pytest>=8.0.0",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

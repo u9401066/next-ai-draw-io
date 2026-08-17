@@ -1,6 +1,6 @@
 """
 Draw.io MCP Server
-使用 FastMCP 建立的 MCP Server，讓 GitHub Copilot 可以創建和編輯 Draw.io 圖表
+使用官方 MCP Python SDK 2 建立的 MCP Server，讓 GitHub Copilot 可以創建和編輯 Draw.io 圖表
 透過 HTTP API 與 Next.js 前端即時互動
 
 架構：
@@ -17,15 +17,14 @@ Draw.io MCP Server
 """
 
 import sys
-from fastmcp import FastMCP
+
+from mcp.server import MCPServer
 
 from .config import config
-from .web_client import web_client
 from .tools import register_all_tools
 
-
-# 創建 FastMCP 實例
-mcp = FastMCP("drawio-mcp-server")
+# 建立官方 MCP SDK 2 server；預設以 stdio transport 服務桌面 Agent。
+mcp = MCPServer("drawio-mcp-server")
 
 # 註冊所有工具
 register_all_tools(mcp)
@@ -33,15 +32,15 @@ register_all_tools(mcp)
 
 def main():
     """啟動 MCP Server"""
-    print(f"🚀 Draw.io MCP Server 啟動中...", file=sys.stderr)
+    print("🚀 Draw.io MCP Server 啟動中...", file=sys.stderr)
     print(f"   NEXTJS_URL: {config.nextjs_url}", file=sys.stderr)
     print(f"   AUTO_START_WEB: {config.auto_start_web}", file=sys.stderr)
-    
+
     # 不在啟動時預先啟動 Web 服務，避免阻塞 MCP initialize
     # Web 服務會在第一次呼叫 create_diagram 或其他需要的工具時自動啟動
     # 這樣可以避免 MCP initialize 超時問題
-    print(f"   Web 服務將在首次使用時自動啟動 (lazy start)", file=sys.stderr)
-    
+    print("   Web 服務將在首次使用時自動啟動 (lazy start)", file=sys.stderr)
+
     mcp.run()
 
 
