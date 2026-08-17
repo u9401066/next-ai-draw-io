@@ -3,21 +3,21 @@
  */
 
 export abstract class Entity<T> {
-    protected readonly props: T;
+    protected readonly props: T
 
     protected constructor(props: T) {
-        this.props = props;
+        this.props = props
     }
 
-    public abstract get id(): unknown;
+    public abstract get id(): unknown
 
     public equals(entity?: Entity<T>): boolean {
         if (entity === null || entity === undefined) {
-            return false;
+            return false
         }
         if (this === entity) {
-            return true;
+            return true
         }
-        return JSON.stringify(this.id) === JSON.stringify(entity.id);
+        return JSON.stringify(this.id) === JSON.stringify(entity.id)
     }
 }

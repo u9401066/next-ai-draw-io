@@ -2,5 +2,5 @@
  * Infrastructure Layer Index
  */
 
-export * from './drawio';
-export * from './persistence';
+export * from "./drawio"
+export * from "./persistence"

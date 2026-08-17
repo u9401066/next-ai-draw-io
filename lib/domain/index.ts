@@ -1,14 +1,13 @@
 /**
  * Domain Layer Index
- * 
+ *
  * 匯出所有領域模型
  */
 
-// Diagram Aggregate
-export * from './diagram';
-
 // Checkpoint Aggregate
-export * from './checkpoint';
+export * from "./checkpoint"
+// Diagram Aggregate
+export * from "./diagram"
 
 // Shared
-export * from './shared';
+export * from "./shared"

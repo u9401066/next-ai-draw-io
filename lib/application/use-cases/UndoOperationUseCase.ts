@@ -2,30 +2,30 @@
  * UndoOperationUseCase - 復原操作
  */
 
-import { CheckpointManager, Checkpoint } from '../../domain/checkpoint';
+import type { Checkpoint, CheckpointManager } from "../../domain/checkpoint"
 
 export interface UndoOperationInput {
-    diagramId: string;
+    diagramId: string
 }
 
 export interface UndoOperationOutput {
-    success: boolean;
-    checkpoint: Checkpoint | null;
-    canUndoMore: boolean;
-    canRedo: boolean;
+    success: boolean
+    checkpoint: Checkpoint | null
+    canUndoMore: boolean
+    canRedo: boolean
 }
 
 export class UndoOperationUseCase {
-    constructor(private readonly checkpointManager: CheckpointManager) { }
+    constructor(private readonly checkpointManager: CheckpointManager) {}
 
     execute(input: UndoOperationInput): UndoOperationOutput {
-        const checkpoint = this.checkpointManager.undo(input.diagramId);
+        const checkpoint = this.checkpointManager.undo(input.diagramId)
 
         return {
             success: checkpoint !== null,
             checkpoint,
             canUndoMore: this.checkpointManager.canUndo(input.diagramId),
             canRedo: this.checkpointManager.canRedo(input.diagramId),
-        };
+        }
     }
 }

@@ -3,12 +3,12 @@
  */
 
 export abstract class DomainEvent {
-    public readonly occurredOn: Date;
-    public readonly eventType: string;
+    public readonly occurredOn: Date
+    public readonly eventType: string
 
     protected constructor(eventType: string) {
-        this.occurredOn = new Date();
-        this.eventType = eventType;
+        this.occurredOn = new Date()
+        this.eventType = eventType
     }
 }
 
@@ -17,18 +17,18 @@ export abstract class DomainEvent {
 export class DiagramCreatedEvent extends DomainEvent {
     constructor(
         public readonly diagramId: string,
-        public readonly name: string
+        public readonly name: string,
     ) {
-        super('DiagramCreated');
+        super("DiagramCreated")
     }
 }
 
 export class DiagramUpdatedEvent extends DomainEvent {
     constructor(
         public readonly diagramId: string,
-        public readonly source: 'user' | 'agent'
+        public readonly source: "user" | "agent",
     ) {
-        super('DiagramUpdated');
+        super("DiagramUpdated")
     }
 }
 
@@ -36,17 +36,17 @@ export class CheckpointCreatedEvent extends DomainEvent {
     constructor(
         public readonly checkpointId: string,
         public readonly diagramId: string,
-        public readonly source: 'user' | 'agent'
+        public readonly source: "user" | "agent",
     ) {
-        super('CheckpointCreated');
+        super("CheckpointCreated")
     }
 }
 
 export class CheckpointRestoredEvent extends DomainEvent {
     constructor(
         public readonly checkpointId: string,
-        public readonly diagramId: string
+        public readonly diagramId: string,
     ) {
-        super('CheckpointRestored');
+        super("CheckpointRestored")
     }
 }

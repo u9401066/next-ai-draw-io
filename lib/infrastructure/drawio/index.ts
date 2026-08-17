@@ -2,4 +2,4 @@
  * Infrastructure Layer - Draw.io Adapter
  */
 
-export * from './DrawioAdapter';
+export * from "./DrawioAdapter"

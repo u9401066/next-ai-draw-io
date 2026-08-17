@@ -1,245 +1,267 @@
-"use client";
+"use client"
 
 /**
  * useWebSocket Hook
- * 
+ *
  * 管理瀏覽器端 WebSocket 連線生命週期
  * 自動重連、心跳檢測、訊息處理
  */
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useCallback, useEffect, useRef, useState } from "react"
 import type {
-  WSMessage,
-  DiagramUpdateMessage,
-  PendingOperationsMessage,
-  ChangesReportMessage,
-  OperationResultMessage,
-  HumanChanges,
-  ConflictInfo,
-} from './types';
+    ChangesReportMessage,
+    ConflictInfo,
+    DiagramUpdateMessage,
+    HumanChanges,
+    OperationResultMessage,
+    PendingOperationsMessage,
+    WSMessage,
+} from "./types"
 
 interface UseWebSocketOptions {
-  url: string;
-  onDiagramUpdate?: (payload: DiagramUpdateMessage['payload']) => void;
-  onPendingOperations?: (payload: PendingOperationsMessage['payload']) => void;
-  onConnected?: (clientId: string) => void;
-  onDisconnected?: () => void;
-  reconnectInterval?: number;
-  heartbeatInterval?: number;
+    url: string
+    onDiagramUpdate?: (payload: DiagramUpdateMessage["payload"]) => void
+    onPendingOperations?: (payload: PendingOperationsMessage["payload"]) => void
+    onConnected?: (clientId: string) => void
+    onDisconnected?: () => void
+    reconnectInterval?: number
+    heartbeatInterval?: number
 }
 
 interface UseWebSocketReturn {
-  isConnected: boolean;
-  clientId: string | null;
-  sendChangesReport: (tabId: string, changes: HumanChanges) => void;
-  sendOperationResult: (
-    requestId: string,
-    success: boolean,
-    applied: number,
-    conflicts: ConflictInfo[],
-    newXml?: string
-  ) => void;
-  subscribe: (tabId: string) => void;
+    isConnected: boolean
+    clientId: string | null
+    sendChangesReport: (tabId: string, changes: HumanChanges) => void
+    sendOperationResult: (
+        requestId: string,
+        success: boolean,
+        applied: number,
+        conflicts: ConflictInfo[],
+        newXml?: string,
+    ) => void
+    subscribe: (tabId: string) => void
 }
 
 export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
-  const {
-    url,
-    onDiagramUpdate,
-    onPendingOperations,
-    onConnected,
-    onDisconnected,
-    reconnectInterval = 3000,
-    heartbeatInterval = 30000,
-  } = options;
+    const {
+        url,
+        onDiagramUpdate,
+        onPendingOperations,
+        onConnected,
+        onDisconnected,
+        reconnectInterval = 3000,
+        heartbeatInterval = 30000,
+    } = options
 
-  const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const heartbeatIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  
-  // 使用 ref 儲存 callbacks 避免重連
-  const callbacksRef = useRef({
-    onDiagramUpdate,
-    onPendingOperations,
-    onConnected,
-    onDisconnected,
-  });
-  
-  // 更新 callbacks ref
-  useEffect(() => {
-    callbacksRef.current = {
-      onDiagramUpdate,
-      onPendingOperations,
-      onConnected,
-      onDisconnected,
-    };
-  }, [onDiagramUpdate, onPendingOperations, onConnected, onDisconnected]);
-  
-  const [isConnected, setIsConnected] = useState(false);
-  const [clientId, setClientId] = useState<string | null>(null);
+    const wsRef = useRef<WebSocket | null>(null)
+    const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+    const heartbeatIntervalRef = useRef<NodeJS.Timeout | null>(null)
 
-  // 發送訊息
-  const sendMessage = useCallback((message: WSMessage) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify(message));
-    }
-  }, []);
+    // 使用 ref 儲存 callbacks 避免重連
+    const callbacksRef = useRef({
+        onDiagramUpdate,
+        onPendingOperations,
+        onConnected,
+        onDisconnected,
+    })
 
-  // 處理收到的訊息
-  const handleMessage = useCallback((event: MessageEvent) => {
-    try {
-      const message = JSON.parse(event.data) as WSMessage;
-      
-      switch (message.type) {
-        case 'connection_ack':
-          const ackPayload = message.payload as { clientId: string };
-          setClientId(ackPayload.clientId);
-          callbacksRef.current.onConnected?.(ackPayload.clientId);
-          console.log('[WS Client] Connected with ID:', ackPayload.clientId);
-          break;
-
-        case 'diagram_update':
-          const updatePayload = (message as DiagramUpdateMessage).payload;
-          callbacksRef.current.onDiagramUpdate?.(updatePayload);
-          break;
-
-        case 'pending_operations':
-          const opsPayload = (message as PendingOperationsMessage).payload;
-          callbacksRef.current.onPendingOperations?.(opsPayload);
-          break;
-
-        case 'pong':
-          // 心跳回應，不需特別處理
-          break;
-
-        default:
-          console.log('[WS Client] Unknown message type:', message.type);
-      }
-    } catch (error) {
-      console.error('[WS Client] Error parsing message:', error);
-    }
-  }, []); // 移除依賴，使用 ref
-
-  // 建立連線
-  const connect = useCallback(() => {
-    // 如果沒有 URL，不連線
-    if (!url) {
-      console.log('[WS Client] No URL provided, skipping connection');
-      return;
-    }
-    
-    if (wsRef.current?.readyState === WebSocket.OPEN || 
-        wsRef.current?.readyState === WebSocket.CONNECTING) {
-      return;
-    }
-
-    try {
-      console.log('[WS Client] Connecting to:', url);
-      const ws = new WebSocket(url);
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        console.log('[WS Client] Connection opened');
-        setIsConnected(true);
-        
-        // 開始心跳
-        heartbeatIntervalRef.current = setInterval(() => {
-          sendMessage({
-            type: 'ping',
-            timestamp: Date.now(),
-            payload: {},
-          });
-        }, heartbeatInterval);
-      };
-
-      ws.onmessage = handleMessage;
-
-      ws.onclose = () => {
-        console.log('[WS Client] Connection closed');
-        setIsConnected(false);
-        setClientId(null);
-        callbacksRef.current.onDisconnected?.();
-        
-        // 清理心跳
-        if (heartbeatIntervalRef.current) {
-          clearInterval(heartbeatIntervalRef.current);
+    // 更新 callbacks ref
+    useEffect(() => {
+        callbacksRef.current = {
+            onDiagramUpdate,
+            onPendingOperations,
+            onConnected,
+            onDisconnected,
         }
-        
-        // 嘗試重連
-        reconnectTimeoutRef.current = setTimeout(() => {
-          console.log('[WS Client] Attempting reconnection...');
-          connect();
-        }, reconnectInterval);
-      };
+    }, [onDiagramUpdate, onPendingOperations, onConnected, onDisconnected])
 
-      ws.onerror = (error) => {
-        console.error('[WS Client] WebSocket error:', error);
-      };
-    } catch (error) {
-      console.error('[WS Client] Failed to connect:', error);
+    const [isConnected, setIsConnected] = useState(false)
+    const [clientId, setClientId] = useState<string | null>(null)
+
+    // 發送訊息
+    const sendMessage = useCallback((message: WSMessage) => {
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify(message))
+        }
+    }, [])
+
+    // 處理收到的訊息
+    const handleMessage = useCallback((event: MessageEvent) => {
+        try {
+            const message = JSON.parse(event.data) as WSMessage
+
+            switch (message.type) {
+                case "connection_ack": {
+                    const ackPayload = message.payload as { clientId: string }
+                    setClientId(ackPayload.clientId)
+                    callbacksRef.current.onConnected?.(ackPayload.clientId)
+                    console.log(
+                        "[WS Client] Connected with ID:",
+                        ackPayload.clientId,
+                    )
+                    break
+                }
+
+                case "diagram_update": {
+                    const updatePayload = (message as DiagramUpdateMessage)
+                        .payload
+                    callbacksRef.current.onDiagramUpdate?.(updatePayload)
+                    break
+                }
+
+                case "pending_operations": {
+                    const opsPayload = (message as PendingOperationsMessage)
+                        .payload
+                    callbacksRef.current.onPendingOperations?.(opsPayload)
+                    break
+                }
+
+                case "pong":
+                    // 心跳回應，不需特別處理
+                    break
+
+                default:
+                    console.log(
+                        "[WS Client] Unknown message type:",
+                        message.type,
+                    )
+            }
+        } catch (error) {
+            console.error("[WS Client] Error parsing message:", error)
+        }
+    }, []) // 移除依賴，使用 ref
+
+    // 建立連線
+    const connect = useCallback(() => {
+        // 如果沒有 URL，不連線
+        if (!url) {
+            console.log("[WS Client] No URL provided, skipping connection")
+            return
+        }
+
+        if (
+            wsRef.current?.readyState === WebSocket.OPEN ||
+            wsRef.current?.readyState === WebSocket.CONNECTING
+        ) {
+            return
+        }
+
+        try {
+            console.log("[WS Client] Connecting to:", url)
+            const ws = new WebSocket(url)
+            wsRef.current = ws
+
+            ws.onopen = () => {
+                console.log("[WS Client] Connection opened")
+                setIsConnected(true)
+
+                // 開始心跳
+                heartbeatIntervalRef.current = setInterval(() => {
+                    sendMessage({
+                        type: "ping",
+                        timestamp: Date.now(),
+                        payload: {},
+                    })
+                }, heartbeatInterval)
+            }
+
+            ws.onmessage = handleMessage
+
+            ws.onclose = () => {
+                console.log("[WS Client] Connection closed")
+                setIsConnected(false)
+                setClientId(null)
+                callbacksRef.current.onDisconnected?.()
+
+                // 清理心跳
+                if (heartbeatIntervalRef.current) {
+                    clearInterval(heartbeatIntervalRef.current)
+                }
+
+                // 嘗試重連
+                reconnectTimeoutRef.current = setTimeout(() => {
+                    console.log("[WS Client] Attempting reconnection...")
+                    connect()
+                }, reconnectInterval)
+            }
+
+            ws.onerror = (error) => {
+                console.error("[WS Client] WebSocket error:", error)
+            }
+        } catch (error) {
+            console.error("[WS Client] Failed to connect:", error)
+        }
+    }, [url, handleMessage, sendMessage, heartbeatInterval, reconnectInterval]) // 移除 onDisconnected 依賴
+
+    // 初始化連線
+    useEffect(() => {
+        connect()
+
+        return () => {
+            // 清理
+            if (reconnectTimeoutRef.current) {
+                clearTimeout(reconnectTimeoutRef.current)
+            }
+            if (heartbeatIntervalRef.current) {
+                clearInterval(heartbeatIntervalRef.current)
+            }
+            if (wsRef.current) {
+                wsRef.current.close()
+            }
+        }
+    }, [connect])
+
+    // === 公開 API ===
+
+    // 回報用戶變更
+    const sendChangesReport = useCallback(
+        (tabId: string, changes: HumanChanges) => {
+            const message: ChangesReportMessage = {
+                type: "changes_report",
+                timestamp: Date.now(),
+                payload: { tabId, changes },
+            }
+            sendMessage(message)
+        },
+        [sendMessage],
+    )
+
+    // 回報操作結果
+    const sendOperationResult = useCallback(
+        (
+            requestId: string,
+            success: boolean,
+            applied: number,
+            conflicts: ConflictInfo[],
+            newXml?: string,
+        ) => {
+            const message: OperationResultMessage = {
+                type: "operation_result",
+                timestamp: Date.now(),
+                payload: { requestId, success, applied, conflicts, newXml },
+            }
+            sendMessage(message)
+        },
+        [sendMessage],
+    )
+
+    // 訂閱特定 tab
+    const subscribe = useCallback(
+        (tabId: string) => {
+            sendMessage({
+                type: "subscribe",
+                timestamp: Date.now(),
+                payload: { tabId },
+            })
+        },
+        [sendMessage],
+    )
+
+    return {
+        isConnected,
+        clientId,
+        sendChangesReport,
+        sendOperationResult,
+        subscribe,
     }
-  }, [url, handleMessage, sendMessage, heartbeatInterval, reconnectInterval]); // 移除 onDisconnected 依賴
-
-  // 初始化連線
-  useEffect(() => {
-    connect();
-
-    return () => {
-      // 清理
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-      }
-      if (heartbeatIntervalRef.current) {
-        clearInterval(heartbeatIntervalRef.current);
-      }
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
-    };
-  }, [connect]);
-
-  // === 公開 API ===
-
-  // 回報用戶變更
-  const sendChangesReport = useCallback((tabId: string, changes: HumanChanges) => {
-    const message: ChangesReportMessage = {
-      type: 'changes_report',
-      timestamp: Date.now(),
-      payload: { tabId, changes },
-    };
-    sendMessage(message);
-  }, [sendMessage]);
-
-  // 回報操作結果
-  const sendOperationResult = useCallback((
-    requestId: string,
-    success: boolean,
-    applied: number,
-    conflicts: ConflictInfo[],
-    newXml?: string
-  ) => {
-    const message: OperationResultMessage = {
-      type: 'operation_result',
-      timestamp: Date.now(),
-      payload: { requestId, success, applied, conflicts, newXml },
-    };
-    sendMessage(message);
-  }, [sendMessage]);
-
-  // 訂閱特定 tab
-  const subscribe = useCallback((tabId: string) => {
-    sendMessage({
-      type: 'subscribe',
-      timestamp: Date.now(),
-      payload: { tabId },
-    });
-  }, [sendMessage]);
-
-  return {
-    isConnected,
-    clientId,
-    sendChangesReport,
-    sendOperationResult,
-    subscribe,
-  };
 }

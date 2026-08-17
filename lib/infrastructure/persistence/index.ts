@@ -2,4 +2,4 @@
  * Infrastructure Layer - Persistence
  */
 
-export * from './LocalStorageCheckpointRepository';
+export * from "./LocalStorageCheckpointRepository"
