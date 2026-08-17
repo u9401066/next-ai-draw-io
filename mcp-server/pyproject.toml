@@ -4,7 +4,7 @@ version = "2.0.0"
 description = "MCP Server for creating and editing Draw.io diagrams via GitHub Copilot"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "MIT"}
+license = "Apache-2.0"
 authors = [
     {name = "u9401066"}
 ]
