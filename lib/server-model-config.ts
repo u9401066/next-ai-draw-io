@@ -81,7 +81,11 @@ export async function loadRawServerModelsConfig(): Promise<ServerModelsConfig | 
     // Priority 2: ai-models.json file
     const configPath = getConfigPath()
     try {
-        const jsonStr = await fs.readFile(configPath, "utf8")
+        // This path is intentionally resolved at runtime so mounted config files work.
+        const jsonStr = await fs.readFile(
+            /* turbopackIgnore: true */ configPath,
+            "utf8",
+        )
         const json = JSON.parse(jsonStr)
         return ServerModelsConfigSchema.parse(json)
     } catch (err: any) {
